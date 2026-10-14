@@ -37,7 +37,8 @@ const CFG = {
   tube: { color: "#DFFF3F", emissive: "#DFFF3F", emissiveIntensity: 0.35, roughness: 0.3, metalness: 0.0 },
   reflections: 0.5,          // how much the studio light reflects in the blocks (0 = none, 1 = full)
   background: null,          // null = see-through (the Webflow section shows behind); or e.g. "#262626"
-  view: "auto",              // "auto": the Houdini camera if the file has one, else from the top; "top": always top
+  view: "top",               // "top": straight down from the top; "auto": the Houdini camera if the file has one
+  projection: "orthographic", // for the top view: "orthographic" (flat, no perspective) or "perspective"
   zoom: 1.0,                 // > 1 fills more of the box
   speed: 1.0,                // 1 = Houdini's timing
   maxPixelRatio: 2,
@@ -174,6 +175,15 @@ async function start(box) {
   }
   const mid = ext.getCenter(new THREE.Vector3()), size = ext.getSize(new THREE.Vector3());
   const cx = mid.x, cy = mid.y, cz = mid.z, radius = size.length() / 2;
+  // how far the C reaches across (x) and up/down the screen (z) from its centre, untilted and through the tilt
+  const reach = { x: 0, z: 0 }, e = new THREE.Euler(), v = new THREE.Vector3();
+  for (const k of CFG.tilt ? [0, 0.25, 0.5, 0.75, 1] : [0]) {
+    if (CFG.tilt) e.set(CFG.tilt.x * Math.PI / 180 * k, CFG.tilt.y * Math.PI / 180 * k, 0);
+    for (let c = 0; c < 8; c++) {
+      v.set(c & 1 ? 1 : -1, c & 2 ? 1 : -1, c & 4 ? 1 : -1).multiply(size).multiplyScalar(0.5).applyEuler(e);
+      reach.x = Math.max(reach.x, Math.abs(v.x)); reach.z = Math.max(reach.z, Math.abs(v.z));
+    }
+  }
 
   const pivot = new THREE.Group();                 // the tilt turns the C round its own centre
   pivot.position.set(cx, cy, cz);
@@ -195,7 +205,8 @@ async function start(box) {
   const useCam = CFG.view !== "top" && C.camType !== 0;
   let camera;
   const camMat = new THREE.Matrix4().fromArray(C.camM);
-  if (useCam && C.camType === 2) camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
+  const ortho = useCam ? C.camType === 2 : CFG.projection === "orthographic";
+  if (ortho) camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
   else camera = new THREE.PerspectiveCamera(30, 1, 0.01, 1000);
   if (useCam) {
     const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
@@ -211,6 +222,13 @@ async function start(box) {
       Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
     } else if (useCam) {
       camera.fov = 2 * Math.atan(Math.max(C.camHW[1], C.camHW[0] / aspect) / CFG.zoom) * 180 / Math.PI;
+    } else if (ortho) {
+      // flat top view: the C's extent, at every amount of tilt, fitted to the box
+      const hh = Math.max(reach.z, reach.x / aspect) * 1.03 / CFG.zoom;
+      Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
+      const D = 2 * radius + 1;
+      camera.near = 0.01; camera.far = D + 2 * radius;
+      camera.position.set(cx, cy + D, cz); camera.up.set(0, 0, -1); camera.lookAt(cx, cy, cz);
     } else {
       // the nearest distance at which every corner of the C's extent fits the box (with room for the tilt)
       const tv = Math.tan(Math.PI / 12) * CFG.zoom, th = tv * aspect, margin = CFG.tilt ? 1.1 : 1.03;
