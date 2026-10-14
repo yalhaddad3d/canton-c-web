@@ -12,7 +12,7 @@
 </style>
 </head>
 <body>
-<div class="note">Test page for the 3D C. Scroll down: it loads as it comes into view, then tilts as you keep scrolling.</div>
+<div class="note">Test page for the 3D C. Scroll down: it loads as it comes into view, flat top view.</div>
 <div class="stage">
 <!--
   The animated C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
@@ -42,7 +42,7 @@ const CFG = {
   zoom: 1.0,                 // > 1 fills more of the box
   speed: 1.0,                // 1 = Houdini's timing
   maxPixelRatio: 2,
-  tilt: { x: 12, y: -10, over: 400 },  // degrees the C tilts as the page scrolls, over this many pixels; null = off
+  tilt: null,                // scroll tilt, off so the top view stays flat; e.g. { x: 12, y: -10, over: 400 } (degrees, over px)
 };
 
 const boxes = document.querySelectorAll(".c3d[data-src]");
