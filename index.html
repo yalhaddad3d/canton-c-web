@@ -12,7 +12,7 @@
 </style>
 </head>
 <body>
-<div class="note">Test page for the 3D C. Scroll down: it loads as it comes into view, flat top view.</div>
+<div class="note">Test page for the 3D C. Scroll down: the C turns as you scroll, and stops when you stop.</div>
 <div class="stage">
 <!--
   The animated C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
@@ -22,8 +22,9 @@
   2. Optional: a still of the C in data-poster (shown until the 3D draws, and kept for the rare visitor without WebGL).
   3. Size the box in Webflow (or change the style below). The C is framed to fit inside it at any size.
 
+  The animation follows the page scroll (motion: "scroll" below; "time" plays it on its own instead).
   What it does to stay light: nothing loads until the C is about to scroll into view; three.js comes from a CDN only
-  then; all 60 squares are drawn in 2 draw calls; it stops drawing whenever the C is off screen or the tab is hidden;
+  then; all 60 squares are drawn in 2 draw calls; it only draws while the C is on screen and moving;
   the pixel ratio is capped at 2; visitors who ask for reduced motion get a still frame. Works on WebGL, so every
   current browser shows it (no WebGPU needed).
 -->
@@ -40,7 +41,10 @@ const CFG = {
   view: "top",               // "top": straight down from the top; "auto": the Houdini camera if the file has one
   projection: "orthographic", // for the top view: "orthographic" (flat, no perspective) or "perspective"
   zoom: 1.0,                 // > 1 fills more of the box
-  speed: 1.0,                // 1 = Houdini's timing
+  motion: "scroll",          // "scroll": the animation follows the page scroll; "time": it plays on its own
+  scroll: { loops: 1, smooth: 0.15 },  // loops played while the C crosses the screen (enters at the bottom, leaves
+                             // at the top); smooth = seconds it takes to catch up with the scroll (0 = instant)
+  speed: 1.0,                // for motion "time": 1 = Houdini's timing
   maxPixelRatio: 2,
   tilt: null,                // scroll tilt, off so the top view stays flat; e.g. { x: 12, y: -10, over: 400 } (degrees, over px)
 };
@@ -251,7 +255,13 @@ async function start(box) {
   box.__c3d = { pose, C, meshes };                 // handy for checking the motion in the console
 
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let clock = 0, last = 0, running = false, shown = false;
+  let frameNow = 0, last = 0, running = false, shown = false;
+  // scroll: how far the C is through its trip across the screen, as a frame of the loop
+  function scrollTarget() {
+    const r = box.getBoundingClientRect();
+    const p = Math.min(1, Math.max(0, (innerHeight - r.top) / (innerHeight + r.height)));
+    return p * CFG.scroll.loops * P;
+  }
 
   // the scroll tilt (eased), from when the box's top enters the screen
   const deg = Math.PI / 180;
@@ -269,12 +279,12 @@ async function start(box) {
     renderer.setSize(w, h, false);
     frame(w, h);
   }
-  new ResizeObserver(() => { resize(); if (!running) draw(); }).observe(box);
+  new ResizeObserver(() => { resize(); draw(); }).observe(box);
   addEventListener("scroll", () => { tilt(); if (!running) draw(); }, { passive: true });
   resize();
 
   function draw() {
-    pose(((clock * C.fps * CFG.speed) % P + P) % P);
+    pose((frameNow % P + P) % P);
     tilt();
     renderer.render(scene, camera);
     if (!shown) {
@@ -285,8 +295,15 @@ async function start(box) {
     }
   }
   function loop(now) {
-    if (last) clock += Math.min(0.1, (now - last) / 1000);   // no jump after a pause
+    const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;   // no jump after a pause
     last = now;
+    if (CFG.motion === "scroll") {
+      const d = scrollTarget() - frameNow;
+      if (Math.abs(d) < 0.005) return;                          // caught up: nothing new to draw
+      frameNow += CFG.scroll.smooth > 0 ? d * (1 - Math.exp(-dt / CFG.scroll.smooth)) : d;
+    } else {
+      frameNow += dt * C.fps * CFG.speed;
+    }
     draw();
   }
   function play(on) {
@@ -296,6 +313,7 @@ async function start(box) {
     renderer.setAnimationLoop(on ? loop : null);
   }
   new IntersectionObserver((es) => play(es[es.length - 1].isIntersecting)).observe(box);
+  if (CFG.motion === "scroll" && !still) frameNow = scrollTarget();
   draw();
 }
 </script>
