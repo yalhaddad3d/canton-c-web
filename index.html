@@ -57,6 +57,8 @@ const CFG = {
   camera: { x: 2.4152, z: -0.8530, width: 22.2597 },
   zoom: 1.0,                 // > 1 fills more of the screen
   ends: 0.8,                 // the line and the grid: how much of their width the screen shows at most (< 1 hides their ends)
+                             // (their full height always wins: the rows are never cut)
+  fade: 6,                   // on screens too wide to hide the ends, they fade out over this % of the screen width (0 = off)
   maxPixelRatio: 2,
   // the sweep (as in Maya, in frames of its 288-frame loop at 24 fps): one tube after another from the C's top tip,
   // each fading up over `ramp` frames, all held, then one after another fading out the same way
@@ -397,17 +399,30 @@ async function start(box) {
     // the ends (once it is)
     for (let k = 0; k < NK; k++) {
       const tall = Math.max(Hs[k], FIT[k]), narrow = Math.min(Hs[k], COV[k]);
-      Hs[k] = tall + (narrow - tall) * WID[k];
+      Hs[k] = Math.max(FIT[k], tall + (narrow - tall) * WID[k]);
     }
-    plan = { H: ease(Hs, 2), X: ease(X, 2), Z: ease(Z, 2), fh };
+    // the rows always fit, even after easing; L, R: where the shape's ends are (for the fade on very wide screens)
+    const L = new Float32Array(NK), R = new Float32Array(NK);
+    for (let k = 0; k < NK; k++) { L[k] = footW[k * 4]; R[k] = footW[k * 4 + 1]; }
+    plan = { H: ease(Hs, 2).map((h, k) => Math.max(h, FIT[k])), X: ease(X, 2), Z: ease(Z, 2), L, R, fh };
   }
+  let maskNow = "";
   function frameFixed(fs, w) {
-    let x = fixed.x, z = fixed.z, hh = plan.fh;
+    let x = fixed.x, z = fixed.z, hh = plan.fh, mask = "none";
     if (w > 0) {
       const t = Math.min(fs / STEP, NK - 1), k0 = Math.min(Math.floor(t), NK - 2), a = Math.max(0, t - k0);
       const lerp = (A) => A[k0] + (A[k0 + 1] - A[k0]) * a;
       x += (lerp(plan.X) - x) * w; z += (lerp(plan.Z) - z) * w; hh += (lerp(plan.H) - hh) * w;
+      // ends inside the screen (only on screens wider than the grid): fade them out
+      const hw = hh * aspect, l = (lerp(plan.L) - (x - hw)) / (2 * hw) * 100 * w, r = ((x + hw) - lerp(plan.R)) / (2 * hw) * 100 * w;
+      if (CFG.fade > 0 && (l > 0 || r > 0)) {
+        const f = CFG.fade, p = (v) => v.toFixed(1) + "%";
+        const a0 = Math.max(0, l), b0 = Math.max(0, r);
+        mask = "linear-gradient(90deg," + (l > 0 ? "transparent " + p(a0) + ",#000 " + p(a0 + f) : "#000 0%") + "," +
+          (r > 0 ? "#000 " + p(100 - b0 - f) + ",transparent " + p(100 - b0) : "#000 100%") + ")";
+      }
     }
+    if (mask !== maskNow) { maskNow = mask; canvas.style.webkitMaskImage = canvas.style.maskImage = mask; }
     Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
     camera.position.set(x, top, z); camera.lookAt(x, top - 1, z);
     camera.updateProjectionMatrix();
