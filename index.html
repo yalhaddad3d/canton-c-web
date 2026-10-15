@@ -274,6 +274,15 @@ async function start(box) {
     m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     m.frustumCulled = false;
     scene.add(m);
+    if (p.mat === 1) {
+      // the glass's depth first (no colour), so only its front surface is drawn: where a tube's surface folds over itself
+      // in a tight corner, it would otherwise be added twice and show as a bright notch
+      const d = new THREE.InstancedMesh(g, new THREE.MeshBasicMaterial({ colorWrite: false }), C.n);
+      d.instanceMatrix = m.instanceMatrix;
+      d.frustumCulled = false;
+      d.renderOrder = 1;
+      scene.add(d);
+    }
     return m;
   });
 
