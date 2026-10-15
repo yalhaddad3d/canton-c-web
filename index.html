@@ -190,6 +190,18 @@ async function start(box) {
     half = Math.max(half, Math.abs(p.dot(uAx)), Math.abs(p.dot(vAx)));
     thick = Math.max(thick, Math.abs(p.dot(nAx)));
   }
+  // the tube's corner rounding (from its own shape), so the glow and the shading round the corners the same way
+  let rTube = 0.1 * half;
+  const tub = C.parts.find((p) => p.mat === 1);
+  if (tub) {
+    let ax = 0, dg = 0;
+    for (let k = 0; k < tub.pos.length; k += 3) {
+      const p = new THREE.Vector3(tub.pos[k], tub.pos[k + 1], tub.pos[k + 2]), a = Math.abs(p.dot(uAx)), b = Math.abs(p.dot(vAx));
+      ax = Math.max(ax, a, b); dg = Math.max(dg, (a + b) / Math.SQRT2);
+    }
+    rTube = Math.min(Math.max((ax * Math.SQRT2 - dg) / (Math.SQRT2 - 1), 0), half);
+  }
+  const rGlow = Math.max(rTube, 3 * CFG.spill.reach * half), rShade = Math.max(rTube, 0.5 * CFG.shadow.reach * half);
 
   // matcap shading, read straight down (orthographic), with a per-square glow (the sweep)
   const ORTHO = "vec3 viewDir = vec3( 0.0, 0.0, 1.0 );";
@@ -203,14 +215,15 @@ async function start(box) {
   blockMat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, { uGrain: { value: new THREE.Vector3(CFG.grain.amount, CFG.grain.lift, CFG.grain.scale) },
       uShadow: { value: new THREE.Vector3(CFG.shadow.strength, CFG.shadow.reach * half, CFG.shadow.depth * half) },
-      uThick: { value: thick } });
+      uThick: { value: thick }, uRound: { value: new THREE.Vector2(rGlow, rShade) } });
     Object.assign(sh.uniforms, { uU: { value: uAx }, uV: { value: vAx }, uN: { value: nAx }, uHalf: { value: half },
       uSpill: { value: new THREE.Color().fromArray(CFG.spill.color) }, uReach: { value: CFG.spill.reach * half } });
     withGlow(sh, true);
     sh.vertexShader = "varying float vInst;\nattribute vec4 aOccA, aOccB, aOccC, aOccD;\nvarying vec3 vOccL;\n" +
       sh.vertexShader.replace("vGlow = aGlow;", "vGlow = aGlow;\nvInst = float( gl_InstanceID );\n" +
         "vOccL = ( mat4( aOccA, aOccB, aOccC, aOccD ) * ( instanceMatrix * vec4( position, 1.0 ) ) ).xyz;");
-    sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill, uGrain, uShadow;\nuniform float uHalf, uReach, uThick;\nvarying float vInst;\nvarying vec3 vOccL;\n" +
+    sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill, uGrain, uShadow;\nuniform float uHalf, uReach, uThick;\nuniform vec2 uRound;\nvarying float vInst;\nvarying vec3 vOccL;\n" +
+      "float rsq( vec2 p, float a, float r ) { vec2 q = abs( p ) - vec2( a - r ); return length( max( q, 0.0 ) ) + min( max( q.x, q.y ), 0.0 ) - r; }\n" +
       "float h3( vec3 p ) { p = fract( p * 0.3183099 + 0.1 ); p *= 17.0; return fract( p.x * p.y * p.z * ( p.x + p.y + p.z ) ); }\n" +
       "float vn( vec3 x ) { vec3 i = floor( x ), f = fract( x ); f = f * f * ( 3.0 - 2.0 * f );\n" +
       "  return mix( mix( mix( h3( i ), h3( i + vec3( 1, 0, 0 ) ), f.x ), mix( h3( i + vec3( 0, 1, 0 ) ), h3( i + vec3( 1, 1, 0 ) ), f.x ), f.y ),\n" +
@@ -221,10 +234,10 @@ async function start(box) {
       "vec3 gp = vLocal * uGrain.z + vInst * 7.13;\n" +
       "float gn = 0.65 * vn( gp ) + 0.35 * vn( gp * 2.3 + 11.7 );\n" +
       "outgoingLight = outgoingLight * ( 1.0 + uGrain.x * ( 2.0 * gn - 1.0 ) ) + uGrain.y * gn;\n" +
-      "float od = max( abs( dot( vOccL, uU ) ), abs( dot( vOccL, uV ) ) ) - uHalf;\n" +
+      "float od = rsq( vec2( dot( vOccL, uU ), dot( vOccL, uV ) ), uHalf, uRound.y );\n" +
       "float oh = max( abs( dot( vOccL, uN ) ) - uThick, 0.0 );\n" +
       "outgoingLight *= 1.0 - uShadow.x * exp( - max( od, 0.0 ) / uShadow.y ) * exp( - oh / uShadow.z );\n" +
-      "float edge = uHalf - max( abs( dot( vLocal, uU ) ), abs( dot( vLocal, uV ) ) );\n" +
+      "float edge = - rsq( vec2( dot( vLocal, uU ), dot( vLocal, uV ) ), uHalf, uRound.x );\n" +
       "float face = smoothstep( 0.6, 0.9, abs( dot( normalize( vLocalN ), uN ) ) );\n" +
       "outgoingLight += vGlow * face * uSpill * exp( - max( edge, 0.0 ) / uReach );");
   };
