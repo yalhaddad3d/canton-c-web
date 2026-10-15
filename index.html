@@ -56,6 +56,7 @@ const CFG = {
   // null = fit the squares themselves
   camera: { x: 2.4152, z: -0.8530, width: 22.2597 },
   zoom: 1.0,                 // > 1 fills more of the screen
+  ends: 0.8,                 // the line and the grid: how much of their width the screen shows at most (< 1 hides their ends)
   maxPixelRatio: 2,
   // the sweep (as in Maya, in frames of its 288-frame loop at 24 fps): one tube after another from the C's top tip,
   // each fading up over `ramp` frames, all held, then one after another fading out the same way
@@ -349,6 +350,67 @@ async function start(box) {
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, depth);
   camera.up.set(0, 0, -1);
   let aspect = 1;
+  // the scroll animation's footprint seen from the top, every few frames (from the tubes, the outermost part), each
+  // widened to its neighbours so the framing never jitters: the camera opens up just enough to keep it all in view
+  const tubeV = (C.parts.find((p) => p.mat === 1) || C.parts[0]).pos, STEP = 4, NK = Math.floor(PS / STEP) + 1;
+  const foot = new Float32Array(NK * 4), v3 = new THREE.Vector3();
+  for (let k = 0; k < NK; k++) {
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+    for (let i = 0; i < C.n; i++) {
+      at(C.scroll, i, Math.min(k * STEP, PS), pA, qA); M.compose(pA, qA, one);
+      for (let j = 0; j < tubeV.length; j += 6) {
+        v3.set(tubeV[j], tubeV[j + 1], tubeV[j + 2]).applyMatrix4(M);
+        x0 = Math.min(x0, v3.x); x1 = Math.max(x1, v3.x); z0 = Math.min(z0, v3.z); z1 = Math.max(z1, v3.z);
+      }
+    }
+    foot.set([x0, x1, z0, z1], k * 4);
+  }
+  // per sample: the widest height nearby (so the rows always fit) and the narrowest width nearby (so the screen never
+  // gets wider than the line or the grid, even while they grow or shrink)
+  const footW = new Float32Array(NK * 4);
+  for (let k = 0; k < NK; k++) {
+    let x0 = -1e9, x1 = 1e9, z0 = 1e9, z1 = -1e9;
+    for (let j = Math.max(0, k - 2); j <= Math.min(NK - 1, k + 2); j++) {
+      x0 = Math.max(x0, foot[j * 4]); x1 = Math.min(x1, foot[j * 4 + 1]); z0 = Math.min(z0, foot[j * 4 + 2]); z1 = Math.max(z1, foot[j * 4 + 3]);
+    }
+    const m = 0.03 * (z1 - z0);
+    footW.set([x0, x1, z0 - m, z1 + m], k * 4);
+  }
+  // the camera through the scroll, worked out ahead for the current screen shape: the line and the grid keep their full
+  // height in view where they can, and never show their ends once the shape is clearly a line or a grid (the screen is
+  // at most CFG.ends of their width); eased over the scroll so it never snaps
+  let plan = null;
+  function planCamera() {
+    const fh = Math.max(fixed.hh, fixed.hw / aspect) / CFG.zoom;
+    const H = new Float32Array(NK), X = new Float32Array(NK), Z = new Float32Array(NK), COV = new Float32Array(NK), WID = new Float32Array(NK), FIT = new Float32Array(NK);
+    for (let k = 0; k < NK; k++) {
+      const e = footW.subarray(k * 4, k * 4 + 4), wdt = e[1] - e[0], hgt = e[3] - e[2];
+      const fitV = hgt / 2, cover = wdt * CFG.ends / 2 / aspect;
+      H[k] = cover >= fitV ? Math.min(Math.max(fh, fitV), cover) : fitV;
+      X[k] = (e[0] + e[1]) / 2; Z[k] = (e[2] + e[3]) / 2; COV[k] = cover; FIT[k] = fitV;
+      WID[k] = smoothstep((wdt / Math.max(hgt, 1e-6) - 1.5) / 1.0);
+    }
+    const ease = (A, R) => A.map((_, k) => { let s = 0, n = 0; for (let j = Math.max(0, k - R); j <= Math.min(NK - 1, k + R); j++) { s += A[j]; n++; } return s / n; });
+    const Hs = ease(H, 6);
+    // eased zoom, but always tall enough for the shape (until it's clearly a line or a grid) and narrow enough to hide
+    // the ends (once it is)
+    for (let k = 0; k < NK; k++) {
+      const tall = Math.max(Hs[k], FIT[k]), narrow = Math.min(Hs[k], COV[k]);
+      Hs[k] = tall + (narrow - tall) * WID[k];
+    }
+    plan = { H: ease(Hs, 2), X: ease(X, 2), Z: ease(Z, 2), fh };
+  }
+  function frameFixed(fs, w) {
+    let x = fixed.x, z = fixed.z, hh = plan.fh;
+    if (w > 0) {
+      const t = Math.min(fs / STEP, NK - 1), k0 = Math.min(Math.floor(t), NK - 2), a = Math.max(0, t - k0);
+      const lerp = (A) => A[k0] + (A[k0 + 1] - A[k0]) * a;
+      x += (lerp(plan.X) - x) * w; z += (lerp(plan.Z) - z) * w; hh += (lerp(plan.H) - hh) * w;
+    }
+    Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
+    camera.position.set(x, top, z); camera.lookAt(x, top - 1, z);
+    camera.updateProjectionMatrix();
+  }
   function frame(g) {
     const x = camA.x + (camB.x - camA.x) * g, z = camA.z + (camB.z - camA.z) * g;
     const hw = camA.hw + (camB.hw - camA.hw) * g, hh0 = camA.hh + (camB.hh - camA.hh) * g;
@@ -388,7 +450,7 @@ async function start(box) {
     for (const m of meshes) m.instanceMatrix.needsUpdate = true;
     glow.needsUpdate = true;
     for (const a of occ) a.needsUpdate = true;
-    frame(smoothstep(u / 0.35));
+    if (fixed) frameFixed(fScroll, w); else frame(smoothstep(u / 0.35));
     renderer.render(scene, camera);
     if (!shown) {
       shown = true;
@@ -399,7 +461,7 @@ async function start(box) {
   }
   // for checking it in the console: set(scroll 0..1, seconds) shows that moment; pause() stops the clock;
   // lightAll(0..1) lights every tube that much (lightAll(null) goes back to the sweep)
-  box.__c3d = { C, meshes, glow, draw, set: (s, t) => { sNow = s; if (t !== undefined) clock = t; draw(); },
+  box.__c3d = { C, meshes, glow, draw, camera, set: (s, t) => { sNow = s; if (t !== undefined) clock = t; draw(); },
     pause: () => { running = true; renderer.setAnimationLoop(null); }, lightAll: (g) => { forceGlow = g; draw(); } };
 
   function loop(now) {
@@ -416,6 +478,7 @@ async function start(box) {
     aspect = w / h;
     renderer.setPixelRatio(Math.min(devicePixelRatio || 1, CFG.maxPixelRatio));
     renderer.setSize(w, h, false);
+    if (fixed) planCamera();
   }
   new ResizeObserver(() => { resize(); draw(); }).observe(box);
   resize();
