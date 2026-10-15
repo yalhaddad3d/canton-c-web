@@ -41,6 +41,12 @@ const CFG = {
   // the blocks' noise (like the noise in the C material, stuck to each block as it moves; each block its own):
   // amount = contrast of the noise, lift = how much it brightens the darkest faces, scale = noise cells per unit
   grain: { amount: 0.35, lift: 0.004, scale: 66 },
+  // the glass when it's off: how see-through it is facing you (Arnold's transmission 0.75), and how quickly it turns
+  // into reflection toward its edges (higher = thinner reflective rim)
+  glass: { clear: 0.75, edge: 3.0 },
+  // each square shading the one below it: how dark right next to the square above, how far that reaches from its edge,
+  // and how fast it fades as the gap between them grows (both as shares of the square's half size)
+  shadow: { strength: 0.9, reach: 0.6, depth: 1.5 },
   // a lit tube's light on the face of its own square (Arnold's emission lighting the block): colour at the edge, and
   // how far in it reaches (as a share of the square's half size)
   spill: { color: [0.12, 0.19, 0.0], reach: 0.07 },
@@ -178,10 +184,11 @@ async function start(box) {
   }
   if (!uAx) uAx = new THREE.Vector3(1, 0, 0).cross(nAx).normalize();
   const vAx = new THREE.Vector3().crossVectors(nAx, uAx).normalize();
-  let half = 0;
+  let half = 0, thick = 0;
   for (let k = 0; k < blk.pos.length; k += 3) {
     const p = new THREE.Vector3(blk.pos[k], blk.pos[k + 1], blk.pos[k + 2]);
     half = Math.max(half, Math.abs(p.dot(uAx)), Math.abs(p.dot(vAx)));
+    thick = Math.max(thick, Math.abs(p.dot(nAx)));
   }
 
   // matcap shading, read straight down (orthographic), with a per-square glow (the sweep)
@@ -194,12 +201,16 @@ async function start(box) {
   };
   const blockMat = new THREE.MeshMatcapMaterial({ matcap: blockTex });
   blockMat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, { uGrain: { value: new THREE.Vector3(CFG.grain.amount, CFG.grain.lift, CFG.grain.scale) } });
+    Object.assign(sh.uniforms, { uGrain: { value: new THREE.Vector3(CFG.grain.amount, CFG.grain.lift, CFG.grain.scale) },
+      uShadow: { value: new THREE.Vector3(CFG.shadow.strength, CFG.shadow.reach * half, CFG.shadow.depth * half) },
+      uThick: { value: thick } });
     Object.assign(sh.uniforms, { uU: { value: uAx }, uV: { value: vAx }, uN: { value: nAx }, uHalf: { value: half },
       uSpill: { value: new THREE.Color().fromArray(CFG.spill.color) }, uReach: { value: CFG.spill.reach * half } });
     withGlow(sh, true);
-    sh.vertexShader = "varying float vInst;\n" + sh.vertexShader.replace("vGlow = aGlow;", "vGlow = aGlow;\nvInst = float( gl_InstanceID );");
-    sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill, uGrain;\nuniform float uHalf, uReach;\nvarying float vInst;\n" +
+    sh.vertexShader = "varying float vInst;\nattribute vec4 aOccA, aOccB, aOccC, aOccD;\nvarying vec3 vOccL;\n" +
+      sh.vertexShader.replace("vGlow = aGlow;", "vGlow = aGlow;\nvInst = float( gl_InstanceID );\n" +
+        "vOccL = ( mat4( aOccA, aOccB, aOccC, aOccD ) * ( instanceMatrix * vec4( position, 1.0 ) ) ).xyz;");
+    sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill, uGrain, uShadow;\nuniform float uHalf, uReach, uThick;\nvarying float vInst;\nvarying vec3 vOccL;\n" +
       "float h3( vec3 p ) { p = fract( p * 0.3183099 + 0.1 ); p *= 17.0; return fract( p.x * p.y * p.z * ( p.x + p.y + p.z ) ); }\n" +
       "float vn( vec3 x ) { vec3 i = floor( x ), f = fract( x ); f = f * f * ( 3.0 - 2.0 * f );\n" +
       "  return mix( mix( mix( h3( i ), h3( i + vec3( 1, 0, 0 ) ), f.x ), mix( h3( i + vec3( 0, 1, 0 ) ), h3( i + vec3( 1, 1, 0 ) ), f.x ), f.y ),\n" +
@@ -210,15 +221,25 @@ async function start(box) {
       "vec3 gp = vLocal * uGrain.z + vInst * 7.13;\n" +
       "float gn = 0.65 * vn( gp ) + 0.35 * vn( gp * 2.3 + 11.7 );\n" +
       "outgoingLight = outgoingLight * ( 1.0 + uGrain.x * ( 2.0 * gn - 1.0 ) ) + uGrain.y * gn;\n" +
+      "float od = max( abs( dot( vOccL, uU ) ), abs( dot( vOccL, uV ) ) ) - uHalf;\n" +
+      "float oh = max( abs( dot( vOccL, uN ) ) - uThick, 0.0 );\n" +
+      "outgoingLight *= 1.0 - uShadow.x * exp( - max( od, 0.0 ) / uShadow.y ) * exp( - oh / uShadow.z );\n" +
       "float edge = uHalf - max( abs( dot( vLocal, uU ) ), abs( dot( vLocal, uV ) ) );\n" +
       "float face = smoothstep( 0.6, 0.9, abs( dot( normalize( vLocalN ), uN ) ) );\n" +
       "outgoingLight += vGlow * face * uSpill * exp( - max( edge, 0.0 ) / uReach );");
   };
-  const tubeMat = new THREE.MeshMatcapMaterial({ matcap: tubeTex });
+  // the glass: its reflections added on top, what's behind showing through (less toward its edges); lit, it's solid
+  const tubeMat = new THREE.MeshMatcapMaterial({ matcap: tubeTex, transparent: true, depthWrite: false,
+    blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+    blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor });
   tubeMat.onBeforeCompile = (sh) => {
-    sh.uniforms.uLevels = { value: CFG.look.levels };
+    Object.assign(sh.uniforms, { uLevels: { value: CFG.look.levels }, uGlass: { value: new THREE.Vector3(CFG.glass.clear, CFG.glass.edge, Math.max(CFG.glow, 1e-3)) } });
     withGlow(sh, false);
-    sh.fragmentShader = "uniform float uLevels;\n" + sh.fragmentShader.replace(
+    sh.fragmentShader = "uniform float uLevels;\nuniform vec3 uGlass;\n" + sh.fragmentShader.replace(
+      "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;",
+      "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;\n" +
+      "float ndv = clamp( abs( normal.z ), 0.0, 1.0 );\n" +
+      "diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( vGlow / uGlass.z, 0.0, 1.0 ) );").replace(
       "vec4 matcapColor = texture2D( matcap, uv );",
       "float lv = clamp( vGlow, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );\n" +
       "vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ),\n" +
@@ -227,12 +248,15 @@ async function start(box) {
   const mats = [blockMat, tubeMat];
   const glow = new THREE.InstancedBufferAttribute(new Float32Array(C.n), 1);
   glow.setUsage(THREE.DynamicDrawUsage);
+  // for the shading: every square gets the inverse transform of the square above it
+  const occ = [0, 1, 2, 3].map(() => { const a = new THREE.InstancedBufferAttribute(new Float32Array(C.n * 4), 4); a.setUsage(THREE.DynamicDrawUsage); return a; });
   const meshes = C.parts.map((p) => {
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(p.pos, 3));
     g.setAttribute("normal", new THREE.BufferAttribute(p.nor, 3));
     g.setIndex(new THREE.BufferAttribute(p.idx, 1));
     g.setAttribute("aGlow", glow);
+    if (p.mat === 0) ["aOccA", "aOccB", "aOccC", "aOccD"].forEach((nm, k) => g.setAttribute(nm, occ[k]));
     const m = new THREE.InstancedMesh(g, mats[p.mat] || mats[0], C.n);
     m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     m.frustumCulled = false;
@@ -310,6 +334,8 @@ async function start(box) {
   }
 
   // ---- state
+  const inst = Array.from({ length: C.n }, () => new THREE.Matrix4()), INV = new THREE.Matrix4();
+  const FAR = new THREE.Matrix4().makeTranslation(1e4, 1e4, 1e4);   // "nothing above": far away
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
   let clock = 0, last = 0, running = false, shown = false, sNow = progress(), forceGlow = null;
   function progress() {
@@ -325,10 +351,18 @@ async function start(box) {
     for (let i = 0; i < C.n; i++) {
       matAt(i, fLoop, fScroll, w);
       for (const m of meshes) m.setMatrixAt(i, M);
+      inst[i].copy(M);
       glow.array[i] = CFG.glow * (forceGlow !== null ? forceGlow : still ? 0 : level(i, fSweep));
+    }
+    for (let i = 0; i < C.n; i++) {                // the square above each square (the neighbour sitting higher)
+      const y = inst[i].elements[13];
+      const a = i + 1 < C.n && inst[i + 1].elements[13] > y ? i + 1 : i > 0 && inst[i - 1].elements[13] > y ? i - 1 : -1;
+      const e = a < 0 ? FAR.elements : INV.copy(inst[a]).invert().elements;
+      for (let k = 0; k < 4; k++) occ[k].array.set(e.slice(k * 4, k * 4 + 4), i * 4);
     }
     for (const m of meshes) m.instanceMatrix.needsUpdate = true;
     glow.needsUpdate = true;
+    for (const a of occ) a.needsUpdate = true;
     frame(smoothstep(u / 0.35));
     renderer.render(scene, camera);
     if (!shown) {
