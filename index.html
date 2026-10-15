@@ -37,7 +37,7 @@ const CFG = {
   // the look, from your Arnold renders: shading spheres ("matcaps") rendered in Maya through your ACES view, next to
   // c_web.bin. c_tube.png holds the glass at `levels` steps from off to fully lit
   look: { block: "c_block.webp", tube: "c_tube.webp", levels: 8 },
-  glow: 0.35,                // how bright a fully lit tube is (1 = as in the Arnold render)
+  glow: 1.0,                 // a fully lit tube: 1 = the yellow of the Arnold render (lower is dimmer AND greener: ACES)
   // the blocks' noise (like the noise in the C material, stuck to each block as it moves; each block its own):
   // amount = contrast of the noise, lift = how much it brightens the darkest faces, scale = noise cells per unit
   grain: { amount: 0.25, lift: 0.002, scale: 72 },
@@ -49,7 +49,7 @@ const CFG = {
   shadow: { strength: 0.9, reach: 0.6, depth: 1.5 },
   // a lit tube's light on the face of its own square (Arnold's emission lighting the block): colour at the edge, and
   // how far in it reaches (as a share of the square's half size)
-  spill: { color: [0.12, 0.19, 0.0], reach: 0.07 },
+  spill: { color: [0.12, 0.19, 0.0], reach: 0.07, amount: 0.35 },   // amount: 1 = as in the Arnold render
   background: null,          // null = see-through (the section shows behind; your render's background is #10100E)
   // one fixed top orthographic camera, framed like the Maya camera "top": its centre (x, z) and ortho width.
   // null = fit the squares themselves
@@ -217,7 +217,7 @@ async function start(box) {
       uShadow: { value: new THREE.Vector3(CFG.shadow.strength, CFG.shadow.reach * half, CFG.shadow.depth * half) },
       uThick: { value: thick }, uRound: { value: new THREE.Vector2(rGlow, rShade) } });
     Object.assign(sh.uniforms, { uU: { value: uAx }, uV: { value: vAx }, uN: { value: nAx }, uHalf: { value: half },
-      uSpill: { value: new THREE.Color().fromArray(CFG.spill.color) }, uReach: { value: CFG.spill.reach * half } });
+      uSpill: { value: new THREE.Color().fromArray(CFG.spill.color).multiplyScalar(CFG.spill.amount) }, uReach: { value: CFG.spill.reach * half } });
     withGlow(sh, true);
     sh.vertexShader = "varying float vInst;\nattribute vec4 aOccA, aOccB, aOccC, aOccD;\nvarying vec3 vOccL;\n" +
       sh.vertexShader.replace("vGlow = aGlow;", "vGlow = aGlow;\nvInst = float( gl_InstanceID );\n" +
@@ -252,9 +252,9 @@ async function start(box) {
       "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;",
       "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;\n" +
       "float ndv = clamp( abs( normal.z ), 0.0, 1.0 );\n" +
-      "diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( vGlow / uGlass.z, 0.0, 1.0 ) );").replace(
+      "diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( vGlow, 0.0, 1.0 ) );").replace(
       "vec4 matcapColor = texture2D( matcap, uv );",
-      "float lv = clamp( vGlow, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );\n" +
+      "float lv = clamp( vGlow * uGlass.z, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );\n" +
       "vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ),\n" +
       "                        texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );");
   };
@@ -374,7 +374,7 @@ async function start(box) {
       matAt(i, fLoop, fScroll, w);
       for (const m of meshes) m.setMatrixAt(i, M);
       inst[i].copy(M);
-      glow.array[i] = CFG.glow * (forceGlow !== null ? forceGlow : still ? 0 : level(i, fSweep));
+      glow.array[i] = forceGlow !== null ? forceGlow : still ? 0 : level(i, fSweep);
     }
     for (let i = 0; i < C.n; i++) {                // the square above each square (the neighbour sitting higher)
       const y = inst[i].elements[13];
