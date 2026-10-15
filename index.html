@@ -38,6 +38,7 @@ const CFG = {
   // c_web.bin. c_tube.png holds the glass at `levels` steps from off to fully lit
   look: { block: "c_block.webp", tube: "c_tube.webp", levels: 8 },
   glow: 1.0,                 // a fully lit tube: 1 = the yellow of the Arnold render (lower is dimmer AND greener: ACES)
+  brightness: 1.0,           // a lit tube's brightness, keeping its yellow (1 = as bright as the Arnold render)
   // the blocks' noise (like the noise in the C material, stuck to each block as it moves; each block its own):
   // amount = contrast of the noise, lift = how much it brightens the darkest faces, scale = noise cells per unit
   grain: { amount: 0.25, lift: 0.002, scale: 72 },
@@ -49,7 +50,7 @@ const CFG = {
   shadow: { strength: 0.9, reach: 0.6, depth: 1.5 },
   // a lit tube's light on the face of its own square (Arnold's emission lighting the block): colour at the edge, and
   // how far in it reaches (as a share of the square's half size)
-  spill: { color: [0.12, 0.19, 0.0], reach: 0.07, amount: 0.35 },   // amount: 1 = as in the Arnold render
+  spill: { color: [0.12, 0.19, 0.0], reach: 0.07, amount: 0.2 },   // amount: 1 = as in the Arnold render
   background: null,          // null = see-through (the section shows behind; your render's background is #10100E)
   // one fixed top orthographic camera, framed like the Maya camera "top": its centre (x, z) and ortho width.
   // null = fit the squares themselves
@@ -246,9 +247,10 @@ async function start(box) {
     blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
     blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor });
   tubeMat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, { uLevels: { value: CFG.look.levels }, uGlass: { value: new THREE.Vector3(CFG.glass.clear, CFG.glass.edge, Math.max(CFG.glow, 1e-3)) } });
+    Object.assign(sh.uniforms, { uLevels: { value: CFG.look.levels }, uGlass: { value: new THREE.Vector3(CFG.glass.clear, CFG.glass.edge, Math.max(CFG.glow, 1e-3)) },
+      uBright: { value: CFG.brightness } });
     withGlow(sh, false);
-    sh.fragmentShader = "uniform float uLevels;\nuniform vec3 uGlass;\n" + sh.fragmentShader.replace(
+    sh.fragmentShader = "uniform float uLevels, uBright;\nuniform vec3 uGlass;\n" + sh.fragmentShader.replace(
       "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;",
       "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;\n" +
       "float ndv = clamp( abs( normal.z ), 0.0, 1.0 );\n" +
@@ -256,7 +258,8 @@ async function start(box) {
       "vec4 matcapColor = texture2D( matcap, uv );",
       "float lv = clamp( vGlow * uGlass.z, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );\n" +
       "vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ),\n" +
-      "                        texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );");
+      "                        texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );\n" +
+      "matcapColor.rgb *= mix( 1.0, uBright, clamp( vGlow, 0.0, 1.0 ) );");
   };
   const mats = [blockMat, tubeMat];
   const glow = new THREE.InstancedBufferAttribute(new Float32Array(C.n), 1);
