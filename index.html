@@ -37,7 +37,10 @@ const CFG = {
   // the look, from your Arnold renders: shading spheres ("matcaps") rendered in Maya through your ACES view, next to
   // c_web.bin. c_tube.png holds the glass at `levels` steps from off to fully lit
   look: { block: "c_block.webp", tube: "c_tube.webp", levels: 8 },
-  glow: 0.35,                 // how bright a fully lit tube is (1 = as in the Arnold render)
+  glow: 0.35,                // how bright a fully lit tube is (1 = as in the Arnold render)
+  // the blocks' noise (like the noise in the C material, stuck to each block as it moves; each block its own):
+  // amount = contrast of the noise, lift = how much it brightens the darkest faces, scale = noise cells per unit
+  grain: { amount: 0.6, lift: 0.004, scale: 22 },
   // a lit tube's light on the face of its own square (Arnold's emission lighting the block): colour at the edge, and
   // how far in it reaches (as a share of the square's half size)
   spill: { color: [0.12, 0.19, 0.0], reach: 0.07 },
@@ -191,12 +194,22 @@ async function start(box) {
   };
   const blockMat = new THREE.MeshMatcapMaterial({ matcap: blockTex });
   blockMat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, { uGrain: { value: new THREE.Vector3(CFG.grain.amount, CFG.grain.lift, CFG.grain.scale) } });
     Object.assign(sh.uniforms, { uU: { value: uAx }, uV: { value: vAx }, uN: { value: nAx }, uHalf: { value: half },
       uSpill: { value: new THREE.Color().fromArray(CFG.spill.color) }, uReach: { value: CFG.spill.reach * half } });
     withGlow(sh, true);
-    sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill;\nuniform float uHalf, uReach;\n" + sh.fragmentShader.replace(
+    sh.vertexShader = "varying float vInst;\n" + sh.vertexShader.replace("vGlow = aGlow;", "vGlow = aGlow;\nvInst = float( gl_InstanceID );");
+    sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill, uGrain;\nuniform float uHalf, uReach;\nvarying float vInst;\n" +
+      "float h3( vec3 p ) { p = fract( p * 0.3183099 + 0.1 ); p *= 17.0; return fract( p.x * p.y * p.z * ( p.x + p.y + p.z ) ); }\n" +
+      "float vn( vec3 x ) { vec3 i = floor( x ), f = fract( x ); f = f * f * ( 3.0 - 2.0 * f );\n" +
+      "  return mix( mix( mix( h3( i ), h3( i + vec3( 1, 0, 0 ) ), f.x ), mix( h3( i + vec3( 0, 1, 0 ) ), h3( i + vec3( 1, 1, 0 ) ), f.x ), f.y ),\n" +
+      "              mix( mix( h3( i + vec3( 0, 0, 1 ) ), h3( i + vec3( 1, 0, 1 ) ), f.x ), mix( h3( i + vec3( 0, 1, 1 ) ), h3( i + vec3( 1, 1, 1 ) ), f.x ), f.y ), f.z ); }\n" +
+      sh.fragmentShader.replace(
       "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;",
       "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;\n" +
+      "vec3 gp = vLocal * uGrain.z + vInst * 7.13;\n" +
+      "float gn = 0.65 * vn( gp ) + 0.35 * vn( gp * 2.3 + 11.7 );\n" +
+      "outgoingLight = outgoingLight * ( 1.0 + uGrain.x * ( 2.0 * gn - 1.0 ) ) + uGrain.y * gn;\n" +
       "float edge = uHalf - max( abs( dot( vLocal, uU ) ), abs( dot( vLocal, uV ) ) );\n" +
       "float face = smoothstep( 0.6, 0.9, abs( dot( normalize( vLocalN ), uN ) ) );\n" +
       "outgoingLight += vGlow * face * uSpill * exp( - max( edge, 0.0 ) / uReach );");
