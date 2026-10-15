@@ -62,8 +62,9 @@ const CFG = {
   // each fading up over `ramp` frames, all held, then one after another fading out the same way
   sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 210, outStep: 1.0, ramp: 16, reverse: false },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
-  // rest of the section plays the line and the grid wall. `smooth`: seconds it takes to catch up with the scroll
-  scroll: { hold: 0.05, blend: 0.1, smooth: 0.15 },
+  // section then plays the line and the grid wall, and the finished grid stays on screen for the last `end` before the
+  // section scrolls away. `smooth`: seconds it takes to catch up with the scroll
+  scroll: { hold: 0.05, blend: 0.1, end: 0.15, smooth: 0.15 },
 };
 
 document.querySelectorAll(".c3d[data-src]").forEach((box) => {
@@ -432,8 +433,9 @@ async function start(box) {
   function draw() {
     const fLoop = still ? 0 : (clock * C.fps) % PL;
     const fSweep = (clock * C.fps) % S.loop;
-    const u = Math.min(1, Math.max(0, (sNow - CFG.scroll.hold) / (1 - CFG.scroll.hold)));
-    const w = smoothstep(u * (1 - CFG.scroll.hold) / CFG.scroll.blend);
+    const span = 1 - CFG.scroll.hold - CFG.scroll.end;
+    const u = Math.min(1, Math.max(0, (sNow - CFG.scroll.hold) / span));
+    const w = smoothstep(u * span / CFG.scroll.blend);
     const fScroll = u * PS;
     for (let i = 0; i < C.n; i++) {
       matAt(i, fLoop, fScroll, w);
