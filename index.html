@@ -6,56 +6,58 @@
 <title>C test</title>
 <style>
   body { margin: 0; background: #262626; color: #9a9a9a; font: 15px/1.5 system-ui, sans-serif; }
-  .note { min-height: 70vh; display: flex; align-items: flex-end; justify-content: center; padding: 0 16px 40px; text-align: center; }
-  .stage { width: min(700px, 100% - 32px); margin: 0 auto; }
-  .after { height: 150vh; }
+  .note { min-height: 60vh; display: flex; align-items: flex-end; justify-content: center; padding: 0 16px 40px; text-align: center; }
+  .after { height: 60vh; }
 </style>
 </head>
 <body>
-<div class="note">Test page for the 3D C. Scroll down: the C turns as you scroll, and stops when you stop.</div>
-<div class="stage">
+<div class="note">Test page for the 3D C. Scroll down: it becomes the line, then the grid wall. Scroll back up for the C.</div>
 <!--
-  The animated C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
-  In Webflow: add an Embed element where the C goes and paste all of this into it.
+  The 3D C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
+  In Webflow: add a Code Embed where the C goes and paste all of this into it.
 
-  1. Host c_web.bin somewhere the page can fetch it, and put its URL in data-src below (see the notes at the bottom).
-  2. Optional: a still of the C in data-poster (shown until the 3D draws, and kept for the rare visitor without WebGL).
-  3. Size the box in Webflow (or change the style below). The C is framed to fit inside it at any size.
+  What it does: the C turns on its own forever, its tubes lighting up and going out in the sweep. Scrolling down
+  through the section bends it into the line and then spreads it into the grid wall; scrolling back up brings it back
+  to the turning C. The C stays pinned on screen while you scroll through the section (its height sets how long the
+  scroll is: 300vh below).
 
-  The animation follows the page scroll (motion: "scroll" below; "time" plays it on its own instead).
-  What it does to stay light: nothing loads until the C is about to scroll into view; three.js comes from a CDN only
-  then; all 60 squares are drawn in 2 draw calls; it only draws while the C is on screen and moving;
-  the pixel ratio is capped at 2; visitors who ask for reduced motion get a still frame. Works on WebGL, so every
-  current browser shows it (no WebGPU needed).
+  Light on purpose: nothing loads until the section is about to scroll into view; three.js comes from a CDN only then;
+  all 60 squares are drawn in 2 draw calls; it only draws while on screen; the pixel ratio is capped at 2; works on
+  WebGL, so every current browser shows it. Visitors who ask for reduced motion get a still C (scrolling still works).
+  Put the URL of c_web.bin in data-src below.
 -->
-<div class="c3d" data-src="https://cdn.jsdelivr.net/gh/yalhaddad3d/canton-c-web@v1/c_web.bin" data-poster=""
-     style="position:relative;width:100%;aspect-ratio:1/1;overflow:hidden"></div>
+<div class="c3d-track" style="position:relative;height:300vh">
+  <div class="c3d" data-src="https://cdn.jsdelivr.net/gh/yalhaddad3d/canton-c-web@v2/c_web.bin" data-poster=""
+       style="position:sticky;top:0;width:100%;height:100vh;overflow:hidden"></div>
+</div>
 
 <script type="module">
 const CFG = {
   three: "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
-  block: { color: "#000000", roughness: 0.6, metalness: 0.0 },                 // the squares
-  tube: { color: "#DFFF3F", emissive: "#DFFF3F", emissiveIntensity: 0.35, roughness: 0.3, metalness: 0.0 },
-  reflections: 0.5,          // how much the studio light reflects in the blocks (0 = none, 1 = full)
+  block: { color: "#000000", roughness: 0.6, metalness: 0.0 },
+  tube: { color: "#151515", roughness: 0.15, metalness: 0.0 },     // the glass when it's off
+  glowColor: "#DFFF3F",      // the tubes when they're lit
+  glow: 1.0,                 // how bright a lit tube is
+  reflections: 0.5,          // studio light reflected in the blocks (0 = none, 1 = full)
   background: null,          // null = see-through (the Webflow section shows behind); or e.g. "#262626"
-  view: "top",               // "top": straight down from the top; "auto": the Houdini camera if the file has one
-  projection: "orthographic", // for the top view: "orthographic" (flat, no perspective) or "perspective"
-  zoom: 1.0,                 // > 1 fills more of the box
-  motion: "scroll",          // "scroll": the animation follows the page scroll; "time": it plays on its own
-  scroll: { loops: 1, smooth: 0.15 },  // loops played while the C crosses the screen (enters at the bottom, leaves
-                             // at the top); smooth = seconds it takes to catch up with the scroll (0 = instant)
-  speed: 1.0,                // for motion "time": 1 = Houdini's timing
+  // one fixed top orthographic camera, framed like the Maya render camera (top1): its centre (x, z) and ortho width.
+  // null = fit the squares themselves
+  camera: { x: 2.8095, z: -0.7544, width: 47.316 },
+  zoom: 1.0,                 // > 1 fills more of the screen
   maxPixelRatio: 2,
-  tilt: null,                // scroll tilt, off so the top view stays flat; e.g. { x: 12, y: -10, over: 400 } (degrees, over px)
+  // the sweep (as in Maya, in frames of its 288-frame loop at 24 fps): one tube after another from the C's top tip,
+  // each fading up over `ramp` frames, all held, then one after another fading out the same way
+  sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 210, outStep: 1.0, ramp: 16, reverse: false },
+  // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
+  // rest of the section plays the line and the grid wall. `smooth`: seconds it takes to catch up with the scroll
+  scroll: { hold: 0.05, blend: 0.1, smooth: 0.15 },
 };
 
-const boxes = document.querySelectorAll(".c3d[data-src]");
-boxes.forEach((box) => {
+document.querySelectorAll(".c3d[data-src]").forEach((box) => {
   const poster = box.dataset.poster;
   if (poster) {
     const img = new Image();
-    img.src = poster; img.alt = ""; img.decoding = "async";
-    img.className = "c3d-poster";
+    img.src = poster; img.alt = ""; img.decoding = "async"; img.className = "c3d-poster";
     img.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transition:opacity .4s";
     box.appendChild(img);
   }
@@ -76,11 +78,12 @@ function parse(buf) {
   if (String.fromCharCode(...new Uint8Array(buf, 0, 4)) !== "CWEB") throw new Error("not a c_web.bin file");
   o = 4;
   const version = u32();
-  if (version !== 3) throw new Error("c_web.bin version " + version + "; re-export with export_c_web.py");
+  if (version !== 4) throw new Error("c_web.bin version " + version + "; re-export with the latest export_c_web.py");
   const n = dv.getUint16(o, true), nParts = dv.getUint16(o + 2, true); o += 4;
-  const nf = u32(), fps = f32s(1)[0];
-  const tq = f32s(6), gq = f32s(6), bounds = f32s(4);
-  const camType = u32(), camM = f32s(16), camHW = f32s(2), slope = f32s(4);
+  const nClips = u32(), fps = f32s(1)[0];
+  const gq = f32s(6), sym = f32s(4);
+  const cams = [];
+  for (let k = 0; k < 2; k++) { const has = u32(), v = f32s(5); cams.push(has ? { x: v[0], y: v[1], z: v[2], hw: v[3], hh: v[4] } : null); }
   const parts = [];
   for (let p = 0; p < nParts; p++) {
     const mat = u32(), nv = u32(), ni = u32();
@@ -92,30 +95,40 @@ function parse(buf) {
     }
     parts.push({ mat, pos, nor, idx });
   }
-  const tracks = [];
-  for (let i = 0; i < n; i++) {
-    const nt = u32(), nr = u32();
-    const tf = arr(Uint16Array, nt), tv = arr(Uint16Array, nt * 3), td = arr(Int16Array, nt * 3);
-    const rf = arr(Uint16Array, nr), rv = arr(Int16Array, nr * 4), rd = arr(Int16Array, nr * 4);
-    const T = new Float32Array(nt * 3), TD = new Float32Array(nt * 3), R = new Float32Array(nr * 4), RD = new Float32Array(nr * 4);
-    for (let k = 0; k < nt * 3; k++) { const a = k % 3; T[k] = tq[a] + tv[k] * tq[3 + a]; TD[k] = td[k] / 32767 * slope[a]; }
-    for (let k = 0; k < nr * 4; k++) { R[k] = rv[k] / 32767; RD[k] = rd[k] / 32767 * slope[3]; }
-    tracks.push({ tf, T, TD, rf, R, RD, ct: 0, cr: 0 });
+  const clips = [];
+  for (let c = 0; c < nClips; c++) {
+    const nf = u32(), q = f32s(10);              // translation min (3), step (3), slope ranges (3 + 1)
+    const tracks = [];
+    for (let i = 0; i < n; i++) {
+      const nt = u32(), nr = u32(), nc = u32();
+      const tf = arr(Uint16Array, nt), tv = arr(Uint16Array, nt * 3), td = arr(Int16Array, nt * 3);
+      const rf = arr(Uint16Array, nr), rv = arr(Int16Array, nr * 4), rd = arr(Int16Array, nr * 4);
+      const cs = arr(Uint16Array, nc);
+      const T = new Float32Array(nt * 3), TD = new Float32Array(nt * 3), R = new Float32Array(nr * 4), RD = new Float32Array(nr * 4);
+      for (let k = 0; k < nt * 3; k++) { const a = k % 3; T[k] = q[a] + tv[k] * q[3 + a]; TD[k] = td[k] / 32767 * q[6 + a]; }
+      for (let k = 0; k < nr * 4; k++) { R[k] = rv[k] / 32767; RD[k] = rd[k] / 32767 * q[9]; }
+      const cut = new Uint8Array(nf);
+      for (const f of cs) cut[f] = 1;
+      tracks.push({ tf, T, TD, rf, R, RD, cut, ct: 0, cr: 0 });
+    }
+    clips.push({ nf, tracks });
   }
-  return { n, nf, fps, bounds, camType, camM, camHW, parts, tracks };
+  return { n, fps, sym, cams, parts, loop: clips[0], scroll: clips[1] };
 }
 
-// the curve through a track's keys at frame f (Hermite: each key has its value and slope)
-function hermite(frames, V, D, dim, f, cur, out) {
+// a track's curve at frame f (Hermite: each key has its value and slope); across a cut it holds, then jumps
+function hermite(frames, V, D, dim, f, cur, cut, out) {
   let j = cur;
   if (f < frames[j] || j > frames.length - 2) j = 0;
   while (j < frames.length - 2 && frames[j + 1] <= f) j++;
-  const f0 = frames[j], h = frames[j + 1] - f0, u = (f - f0) / h, u2 = u * u, u3 = u2 * u;
+  const f0 = frames[j], h = frames[j + 1] - f0, i0 = j * dim, i1 = i0 + dim;
+  if (cut[f0] && h === 1) { for (let k = 0; k < dim; k++) out[k] = V[i0 + k]; return j; }
+  const u = (f - f0) / h, u2 = u * u, u3 = u2 * u;
   const a = 2 * u3 - 3 * u2 + 1, b = (u3 - 2 * u2 + u) * h, c = -2 * u3 + 3 * u2, d = (u3 - u2) * h;
-  const i0 = j * dim, i1 = i0 + dim;
   for (let k = 0; k < dim; k++) out[k] = a * V[i0 + k] + b * D[i0 + k] + c * V[i1 + k] + d * D[i1 + k];
   return j;
 }
+const smoothstep = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
 
 // ------------------------------------------------------------------ the scene
 async function start(box) {
@@ -124,6 +137,7 @@ async function start(box) {
     fetch(box.dataset.src).then((r) => { if (!r.ok) throw new Error("c_web.bin: HTTP " + r.status); return r.arrayBuffer(); }),
   ]);
   const C = parse(data);
+  const track = box.closest(".c3d-track") || box;
 
   let renderer;
   try {
@@ -135,7 +149,6 @@ async function start(box) {
   box.appendChild(canvas);
 
   const scene = new THREE.Scene();
-  // soft studio reflections for the black blocks: a small room of light panels, prefiltered once
   const pmrem = new THREE.PMREMGenerator(renderer);
   const room = new THREE.Scene();
   room.add(new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), new THREE.MeshBasicMaterial({ color: 0x202020, side: THREE.BackSide })));
@@ -150,142 +163,118 @@ async function start(box) {
   sun.position.set(0.4, 1, 0.6);
   scene.add(sun);
 
-  const mats = [
-    new THREE.MeshStandardMaterial(CFG.block),
-    new THREE.MeshStandardMaterial(CFG.tube),
-  ];
-  // the motion
-  const P = C.nf - 1;
-  const tv = new Float32Array(3), qv = new Float32Array(4);
-  const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), M = new THREE.Matrix4();
-  function matAt(i, f) {
-    const t = C.tracks[i];
-    t.ct = hermite(t.tf, t.T, t.TD, 3, f, t.ct, tv);
-    t.cr = hermite(t.rf, t.R, t.RD, 4, f, t.cr, qv);
-    pos.set(tv[0], tv[1], tv[2]);
-    quat.set(qv[0], qv[1], qv[2], qv[3]).normalize();
-    return M.compose(pos, quat, one);
-  }
-
-  // the C's real extent over the whole loop (every square's corners, every 4th frame): for framing and the tilt
-  const ext = new THREE.Box3(), local = new THREE.Box3(), corner = new THREE.Vector3();
-  for (const p of C.parts) local.union(new THREE.Box3().setFromArray(p.pos));
-  for (let f = 0; f < P; f += 4) for (let i = 0; i < C.n; i++) {
-    matAt(i, f);
-    for (let k = 0; k < 8; k++) {
-      corner.set(k & 1 ? local.max.x : local.min.x, k & 2 ? local.max.y : local.min.y, k & 4 ? local.max.z : local.min.z);
-      ext.expandByPoint(corner.applyMatrix4(M));
-    }
-  }
-  const mid = ext.getCenter(new THREE.Vector3()), size = ext.getSize(new THREE.Vector3());
-  const cx = mid.x, cy = mid.y, cz = mid.z, radius = size.length() / 2;
-  // how far the C reaches across (x) and up/down the screen (z) from its centre, untilted and through the tilt
-  const reach = { x: 0, z: 0 }, e = new THREE.Euler(), v = new THREE.Vector3();
-  for (const k of CFG.tilt ? [0, 0.25, 0.5, 0.75, 1] : [0]) {
-    if (CFG.tilt) e.set(CFG.tilt.x * Math.PI / 180 * k, CFG.tilt.y * Math.PI / 180 * k, 0);
-    for (let c = 0; c < 8; c++) {
-      v.set(c & 1 ? 1 : -1, c & 2 ? 1 : -1, c & 4 ? 1 : -1).multiply(size).multiplyScalar(0.5).applyEuler(e);
-      reach.x = Math.max(reach.x, Math.abs(v.x)); reach.z = Math.max(reach.z, Math.abs(v.z));
-    }
-  }
-
-  const pivot = new THREE.Group();                 // the tilt turns the C round its own centre
-  pivot.position.set(cx, cy, cz);
-  scene.add(pivot);
+  // the tubes glow per square (the sweep): an instanced glow value scales their emission
+  const tubeMat = new THREE.MeshStandardMaterial({ ...CFG.tube, emissive: CFG.glowColor, emissiveIntensity: CFG.glow });
+  tubeMat.onBeforeCompile = (sh) => {
+    sh.vertexShader = "attribute float aGlow;\nvarying float vGlow;\n" + sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\nvGlow = aGlow;");
+    sh.fragmentShader = "varying float vGlow;\n" + sh.fragmentShader.replace("vec3 totalEmissiveRadiance = emissive;", "vec3 totalEmissiveRadiance = emissive * vGlow;");
+  };
+  const mats = [new THREE.MeshStandardMaterial(CFG.block), tubeMat];
+  const glow = new THREE.InstancedBufferAttribute(new Float32Array(C.n), 1);
+  glow.setUsage(THREE.DynamicDrawUsage);
   const meshes = C.parts.map((p) => {
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(p.pos, 3));
     g.setAttribute("normal", new THREE.BufferAttribute(p.nor, 3));
     g.setIndex(new THREE.BufferAttribute(p.idx, 1));
+    if (p.mat === 1) g.setAttribute("aGlow", glow);
     const m = new THREE.InstancedMesh(g, mats[p.mat] || mats[0], C.n);
     m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     m.frustumCulled = false;
-    m.position.set(-cx, -cy, -cz);
-    pivot.add(m);
+    scene.add(m);
     return m;
   });
 
-  // camera: Houdini's if the file has one, else straight down from the top (+Z pointing down the screen)
-  const useCam = CFG.view !== "top" && C.camType !== 0;
-  let camera;
-  const camMat = new THREE.Matrix4().fromArray(C.camM);
-  const ortho = useCam ? C.camType === 2 : CFG.projection === "orthographic";
-  if (ortho) camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
-  else camera = new THREE.PerspectiveCamera(30, 1, 0.01, 1000);
-  if (useCam) {
-    const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
-    camMat.decompose(p, q, s);
-    camera.position.copy(p); camera.quaternion.copy(q);
-    const dist = p.distanceTo(mid);
-    camera.near = Math.max(dist - 3 * radius, dist / 100); camera.far = dist + 3 * radius;
+  // ---- the motion: the loop (time) and the scroll, blended through the square's quarter-turn symmetry
+  const tv = new Float32Array(3), qv = new Float32Array(4);
+  const pA = new THREE.Vector3(), qA = new THREE.Quaternion(), pB = new THREE.Vector3(), qB = new THREE.Quaternion();
+  const one = new THREE.Vector3(1, 1, 1), M = new THREE.Matrix4();
+  const symAxis = new THREE.Vector3(C.sym[0], C.sym[1], C.sym[2]).normalize();
+  const quarter = [0, 1, 2, 3].map((k) => new THREE.Quaternion().setFromAxisAngle(symAxis, k * Math.PI / 2));
+  const qTry = new THREE.Quaternion();
+  function at(clip, i, f, p, q) {
+    const t = clip.tracks[i];
+    t.ct = hermite(t.tf, t.T, t.TD, 3, f, t.ct, t.cut, tv);
+    t.cr = hermite(t.rf, t.R, t.RD, 4, f, t.cr, t.cut, qv);
+    p.set(tv[0], tv[1], tv[2]);
+    q.set(qv[0], qv[1], qv[2], qv[3]).normalize();
   }
-  function frame(w, h) {
-    const aspect = w / h;
-    if (useCam && C.camType === 2) {
-      const hh = Math.max(C.camHW[1], C.camHW[0] / aspect) / CFG.zoom;
-      Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
-    } else if (useCam) {
-      camera.fov = 2 * Math.atan(Math.max(C.camHW[1], C.camHW[0] / aspect) / CFG.zoom) * 180 / Math.PI;
-    } else if (ortho) {
-      // flat top view: the C's extent, at every amount of tilt, fitted to the box
-      const hh = Math.max(reach.z, reach.x / aspect) * 1.03 / CFG.zoom;
-      Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
-      const D = 2 * radius + 1;
-      camera.near = 0.01; camera.far = D + 2 * radius;
-      camera.position.set(cx, cy + D, cz); camera.up.set(0, 0, -1); camera.lookAt(cx, cy, cz);
-    } else {
-      // the nearest distance at which every corner of the C's extent fits the box (with room for the tilt)
-      const tv = Math.tan(Math.PI / 12) * CFG.zoom, th = tv * aspect, margin = CFG.tilt ? 1.1 : 1.03;
-      const hx = size.x / 2 * margin, hy = size.y / 2, hz = size.z / 2 * margin;
-      const D = hy + Math.max(hx / th, hz / tv);
-      camera.fov = 30; camera.near = Math.max(D / 1000, (D - 2 * hy) / 2); camera.far = D + 2 * radius;
-      camera.position.set(cx, cy + D, cz); camera.up.set(0, 0, -1); camera.lookAt(cx, cy, cz);
+  function matAt(i, fLoop, fScroll, w) {
+    if (w <= 0) at(C.loop, i, fLoop, pA, qA);
+    else if (w >= 1) at(C.scroll, i, fScroll, pA, qA);
+    else {
+      at(C.loop, i, fLoop, pA, qA);
+      at(C.scroll, i, fScroll, pB, qB);
+      let best = -1, bk = 0;                     // the quarter turn of the loop's square closest to the scroll's
+      for (let k = 0; k < 4; k++) { const d = Math.abs(qTry.copy(qA).multiply(quarter[k]).dot(qB)); if (d > best) { best = d; bk = k; } }
+      qA.multiply(quarter[bk]).slerp(qB, w);
+      pA.lerp(pB, w);
     }
-    camera.aspect = aspect;
+    return M.compose(pA, qA, one);
+  }
+
+  // ---- the sweep (Maya's level(i, f, n))
+  const S = CFG.sweep;
+  function level(i, f) {
+    const k = S.reverse ? C.n - 1 - i : i;
+    const a = S.inStart + S.inStep * k, b = S.outStart + S.outStep * k;
+    return smoothstep((f - a) / S.ramp) * (1 - smoothstep((f - b) / S.ramp));
+  }
+
+  // ---- framing: one top orthographic camera (CFG.camera), or the squares' own extent without it
+  const local = new THREE.Box3();
+  for (const p of C.parts) local.union(new THREE.Box3().setFromArray(p.pos));
+  const corner = new THREE.Vector3();
+  function extent(clip, f0, f1, step) {
+    const b = new THREE.Box3();
+    for (let f = f0; f <= f1; f += step) for (let i = 0; i < C.n; i++) {
+      at(clip, i, f, pA, qA); M.compose(pA, qA, one);
+      for (let k = 0; k < 8; k++) {
+        corner.set(k & 1 ? local.max.x : local.min.x, k & 2 ? local.max.y : local.min.y, k & 4 ? local.max.z : local.min.z);
+        b.expandByPoint(corner.applyMatrix4(M));
+      }
+    }
+    const c = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
+    return { x: c.x, y: c.y, z: c.z, hw: s.x / 2 * 1.03, hh: s.z / 2 * 1.03, top: b.max.y, bottom: b.min.y };
+  }
+  const PL = C.loop.nf - 1, PS = C.scroll.nf - 1;
+  const eL = extent(C.loop, 0, PL - 1, 4), eS = extent(C.scroll, Math.max(0, PS - 24), PS, 4);
+  const fixed = CFG.camera ? { x: CFG.camera.x, z: CFG.camera.z, hw: CFG.camera.width / 2, hh: CFG.camera.width / 2 } : null;
+  const camA = fixed || eL, camB = fixed || eS;
+  const top = Math.max(eL.top, eS.top) + 10, depth = top - Math.min(eL.bottom, eS.bottom) + 10;
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, depth);
+  camera.up.set(0, 0, -1);
+  let aspect = 1;
+  function frame(g) {
+    const x = camA.x + (camB.x - camA.x) * g, z = camA.z + (camB.z - camA.z) * g;
+    const hw = camA.hw + (camB.hw - camA.hw) * g, hh0 = camA.hh + (camB.hh - camA.hh) * g;
+    const hh = Math.max(hh0, hw / aspect) / CFG.zoom;
+    Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
+    camera.position.set(x, top, z); camera.lookAt(x, top - 1, z);
     camera.updateProjectionMatrix();
   }
 
-  function pose(f) {
+  // ---- state
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let clock = 0, last = 0, running = false, shown = false, sNow = progress();
+  function progress() {
+    const r = track.getBoundingClientRect(), span = r.height - innerHeight;
+    return span > 0 ? Math.min(1, Math.max(0, -r.top / span)) : 0;
+  }
+  function draw() {
+    const fLoop = still ? 0 : (clock * C.fps) % PL;
+    const fSweep = (clock * C.fps) % S.loop;
+    const u = Math.min(1, Math.max(0, (sNow - CFG.scroll.hold) / (1 - CFG.scroll.hold)));
+    const w = smoothstep(u * (1 - CFG.scroll.hold) / CFG.scroll.blend);
+    const fScroll = u * PS;
     for (let i = 0; i < C.n; i++) {
-      matAt(i, f);
+      matAt(i, fLoop, fScroll, w);
       for (const m of meshes) m.setMatrixAt(i, M);
+      glow.array[i] = still ? 0 : level(i, fSweep);
     }
     for (const m of meshes) m.instanceMatrix.needsUpdate = true;
-  }
-  box.__c3d = { pose, C, meshes };                 // handy for checking the motion in the console
-
-  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let frameNow = 0, last = 0, running = false, shown = false;
-  // scroll: how far the C is through its trip across the screen, as a frame of the loop
-  function scrollTarget() {
-    const r = box.getBoundingClientRect();
-    const p = Math.min(1, Math.max(0, (innerHeight - r.top) / (innerHeight + r.height)));
-    return p * CFG.scroll.loops * P;
-  }
-
-  // the scroll tilt (eased), from when the box's top enters the screen
-  const deg = Math.PI / 180;
-  function tilt() {
-    if (!CFG.tilt || still) return;
-    const r = box.getBoundingClientRect();
-    let k = Math.min(1, Math.max(0, (innerHeight - r.top) / CFG.tilt.over));
-    k = k * k * (3 - 2 * k);
-    pivot.rotation.set(CFG.tilt.x * deg * k, CFG.tilt.y * deg * k, 0);
-  }
-
-  function resize() {
-    const w = Math.max(1, box.clientWidth), h = Math.max(1, box.clientHeight);
-    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, CFG.maxPixelRatio));
-    renderer.setSize(w, h, false);
-    frame(w, h);
-  }
-  new ResizeObserver(() => { resize(); draw(); }).observe(box);
-  addEventListener("scroll", () => { tilt(); if (!running) draw(); }, { passive: true });
-  resize();
-
-  function draw() {
-    pose((frameNow % P + P) % P);
-    tilt();
+    glow.needsUpdate = true;
+    frame(smoothstep(u / 0.35));
     renderer.render(scene, camera);
     if (!shown) {
       shown = true;
@@ -294,38 +283,43 @@ async function start(box) {
       if (img) img.style.opacity = "0";
     }
   }
+  // for checking it in the console: set(scroll 0..1, seconds) shows that moment; pause() stops the clock
+  box.__c3d = { C, meshes, glow, draw, set: (s, t) => { sNow = s; if (t !== undefined) clock = t; draw(); },
+    pause: () => { running = true; renderer.setAnimationLoop(null); } };
+
   function loop(now) {
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;   // no jump after a pause
     last = now;
-    if (CFG.motion === "scroll") {
-      const d = scrollTarget() - frameNow;
-      if (Math.abs(d) < 0.005) return;                          // caught up: nothing new to draw
-      frameNow += CFG.scroll.smooth > 0 ? d * (1 - Math.exp(-dt / CFG.scroll.smooth)) : d;
-    } else {
-      frameNow += dt * C.fps * CFG.speed;
-    }
+    if (!still) clock += dt;
+    const d = progress() - sNow;
+    sNow += CFG.scroll.smooth > 0 ? d * (1 - Math.exp(-dt / CFG.scroll.smooth)) : d;
+    if (still && Math.abs(d) < 1e-4) return;
     draw();
   }
-  function play(on) {
-    if (still) { draw(); return; }
+  function resize() {
+    const w = Math.max(1, box.clientWidth), h = Math.max(1, box.clientHeight);
+    aspect = w / h;
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, CFG.maxPixelRatio));
+    renderer.setSize(w, h, false);
+  }
+  new ResizeObserver(() => { resize(); draw(); }).observe(box);
+  resize();
+  new IntersectionObserver((es) => {
+    const on = es[es.length - 1].isIntersecting;
     if (on === running) return;
     running = on; last = 0;
     renderer.setAnimationLoop(on ? loop : null);
-  }
-  new IntersectionObserver((es) => play(es[es.length - 1].isIntersecting)).observe(box);
-  if (CFG.motion === "scroll" && !still) frameNow = scrollTarget();
+  }).observe(box);
   draw();
 }
 </script>
 <!--
-  Hosting c_web.bin (Webflow's Assets panel doesn't take .bin or .glb files):
-  - jsDelivr from a GitHub repo (free, compressed, cached worldwide): push c_web.bin to a public repo, then use
-    https://cdn.jsdelivr.net/gh/USER/REPO@COMMIT/c_web.bin  (pin the commit so updates never serve a stale copy)
-  - or your studio's own hosting/CDN, with CORS allowed for the site's domain
-  - or rename it c_web.txt and upload it to Webflow Assets (an unofficial workaround; check it loads on the published site)
+  Hosting c_web.bin (Webflow's Assets panel doesn't take .bin files): a public GitHub repo through jsDelivr,
+  https://cdn.jsdelivr.net/gh/USER/REPO@VERSION/c_web.bin (a new release tag for every update), or the studio's own
+  hosting with CORS allowed for the site's domain.
+  Pinning: the section must not sit inside anything with overflow: hidden, or the sticky C won't stay on screen.
 -->
 
-</div>
 <div class="after"></div>
 </body>
 </html>
