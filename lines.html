@@ -65,8 +65,10 @@ const CFG = {
   // `width` CSS pixels thin, reaching in under the tube. It's lit by a band of light that travels through the wall in
   // the tubes' order, setting off as the tubes start lighting up and again (at `off` strength, 0 = not at all) as they
   // start going out; invisible otherwise. `speed`: the band's pace (1 = with the tubes, lower = trailing them);
-  // `strength`: how bright the lit lines are (1 = the tubes' yellow); `band`: how long the band is. null = no grid
-  lines: { cells: 4, width: 0.75, strength: 0.75, speed: 1, band: 4, off: 1.0 },
+  // `strength`: how bright the lit lines are (1 = the tubes' yellow); `band`: how soft the band's front is (frames);
+  // `length`: how many blocks stay lit behind the front before the lines sweep out; `edge`: how sharp that sweep-out
+  // edge is (share of a block; smaller = sharper). null = no grid
+  lines: { cells: 4, width: 0.75, strength: 0.75, speed: 1, band: 4, length: 2, edge: 0.2, off: 1.0 },
   maxPixelRatio: 2,
   // the sweep (as in Maya, in frames of its 288-frame loop at 24 fps): one tube after another from the C's top tip,
   // each fading up over `ramp` frames, all held, then one after another fading out the same way. `speed`: how fast the
@@ -228,7 +230,7 @@ async function start(box) {
   // the grid on the blocks' faces: its uniforms (set further down, once the finished grid is known)
   const LN = { uLn: { value: new THREE.Vector4() }, uWv: { value: new THREE.Vector4() }, uWv2: { value: new THREE.Vector4() },
     uWv3: { value: new THREE.Vector4() }, uLnL: { value: new THREE.Vector3(CFG.look.levels, Math.max(CFG.glow, 1e-3), CFG.brightness) },
-    uLnTube: { value: tubeTex }, uLnX: { value: new THREE.Vector2() } };
+    uLnTube: { value: tubeTex }, uLnX: { value: new THREE.Vector2() }, uLnB: { value: new THREE.Vector4() } };
   const blockMat = new THREE.MeshMatcapMaterial({ matcap: blockTex });
   blockMat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, { uGrain: { value: new THREE.Vector3(CFG.grain.amount, CFG.grain.lift, CFG.grain.scale) },
@@ -243,8 +245,9 @@ async function start(box) {
         "vWx = ( instanceMatrix * vec4( position, 1.0 ) ).x - instanceMatrix[3].x;\n" +
         "vOccL = ( mat4( aOccA, aOccB, aOccC, aOccD ) * ( instanceMatrix * vec4( position, 1.0 ) ) ).xyz;");
     sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill, uGrain, uShadow;\nuniform float uHalf, uReach, uThick;\nuniform vec2 uRound;\nvarying float vInst, vWx;\nvarying vec3 vOccL;\n" +
-      "uniform vec4 uLn, uWv, uWv2, uWv3;\nuniform vec3 uLnL;\nuniform vec2 uLnX;\nuniform sampler2D uLnTube;\n" +
-      "float band( float f, float t ) { float d = f - t; d -= uWv3.w * floor( d / uWv3.w + 0.5 ); return exp( - d * d / ( 2.0 * uWv2.y * uWv2.y ) ); }\n" +
+      "uniform vec4 uLn, uWv, uWv2, uWv3, uLnB;\nuniform vec3 uLnL;\nuniform vec2 uLnX;\nuniform sampler2D uLnTube;\n" +
+      "float band( float f, float t, float h, float e ) { float d = f - t; d -= uWv3.w * floor( d / uWv3.w + 0.5 );\n" +
+      "  return d < 0.0 ? exp( - d * d / ( 2.0 * uWv2.y * uWv2.y ) ) : 1.0 - smoothstep( h, h + e, d ); }\n" +
       "float gline( float c, float fw, float other, float ext ) { float k = floor( c + 0.5 ); if ( k < 1.0 || k > uLn.z - 1.0 || other < - ext || other > uLn.z + ext ) return 0.0;\n" +
       "  return clamp( 0.5 * uLn.x + 0.5 - abs( c - k ) / max( fw, 1e-5 ), 0.0, 1.0 ); }\n" +
       "float rsq( vec2 p, float a, float r ) { vec2 q = abs( p ) - vec2( a - r ); return length( max( q, 0.0 ) ) + min( max( q.x, q.y ), 0.0 ) - r; }\n" +
@@ -270,7 +273,7 @@ async function start(box) {
       "  float ext = uLnX.x * smoothstep( 0.0, 0.5, vGlow );\n" +
       "  float ln = max( gline( c.x, fw.x, c.y, ext ), gline( c.y, fw.y, c.x, ext ) ) * step( 0.9, face );\n" +
       "  float k = ( uWv3.y > 0.5 ? uWv3.x - 1.0 - vInst : vInst ) + vWx * uWv2.z;\n" +
-      "  float g = uWv3.z >= 0.0 ? uWv3.z : max( band( uWv.x, uWv.y + uWv.z * k ), uWv2.w * band( uWv.x, uWv.w + uWv2.x * k ) );\n" +
+      "  float g = uWv3.z >= 0.0 ? uWv3.z : max( band( uWv.x, uWv.y + uWv.z * k, uLnB.x, uLnB.y ), uWv2.w * band( uWv.x, uWv.w + uWv2.x * k, uLnB.z, uLnB.w ) );\n" +
       "  float a = ln * clamp( g, 0.0, 1.0 ) * uLn.w * uLnX.y;\n" +
       "  if ( a > 0.001 ) {\n" +
       "    float lv = clamp( g * uLnL.y, 0.0, 1.0 ) * ( uLnL.x - 1.0 ), l0 = min( floor( lv ), uLnL.x - 2.0 );\n" +
@@ -500,6 +503,7 @@ async function start(box) {
       const sp = Math.max(L.speed, 0.05);
       LN.uWv.value.set(0, S.inStart + S.ramp / 2, S.inStep / sp, S.outStart + S.ramp / 2);
       LN.uWv2.value.set(S.outStep / sp, L.band / sp, dir / pitch, L.off);
+      LN.uLnB.value.set(L.length * S.inStep / sp, Math.max(L.edge * S.inStep / sp, 0.01), L.length * S.outStep / sp, Math.max(L.edge * S.outStep / sp, 0.01));
       LN.uLnX.value.set(tub ? ((inner + outer) / 2 - inner) / (2 * inner) * L.cells : 0, L.strength);
       LN.uWv3.value.set(C.n, S.reverse ? 1 : 0, -1, S.loop);
       lines = {
