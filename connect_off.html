@@ -606,7 +606,8 @@ async function start(box) {
           // scroll animation), easing in time too (see loop), so scrolling a little never makes them pop
           conTo = still && forceGlow === null ? 0 : w * smoothstep((fs - form) / Math.max((K && K.fadeIn !== undefined ? K.fadeIn : 0.08) * PS, 1));
           if (handSnap) conOn = conTo;
-          const on = conOn;
+          // ...and they go as the blocks move out of their places in the grid (as they move, never after)
+          const on = conOn * (1 - smoothstep((g.err - 0.01) / 0.11));
           if (!quad) return on;
           quad.visible = on > 0.001;
           if (!quad.visible) return on;
@@ -698,7 +699,7 @@ async function start(box) {
     last = now;
     if (!still) clock += dt;
     hand += (handTo - hand) * (1 - Math.exp(-dt / 0.6));
-    conOn += (conTo - conOn) * (1 - Math.exp(-dt / 0.35));
+    conOn += (conTo - conOn) * (1 - Math.exp(-dt / 0.2));
     const d = progress() - sNow;
     sNow += CFG.scroll.smooth > 0 ? d * (1 - Math.exp(-dt / CFG.scroll.smooth)) : d;
     if (still && Math.abs(d) < 1e-4) return;
