@@ -72,10 +72,14 @@ const CFG = {
   lines: { cells: 4, width: 0.75, strength: 0.75, speed: 1, length: 1.6, rise: 0.4, dim: 0.3, edge: 0.3, off: 1.0 },
   maxPixelRatio: 2,
   // the sweep (as in Maya, in frames of its 288-frame loop at 24 fps): one tube after another from the C's top tip,
-  // each fading up over `ramp` frames, all held, then one after another fading out the same way. `speed`: how fast the
-  // whole sweep plays, tubes and grid together (1 = as in Maya, lower = slower). `mirrorOut`: the tubes go out as fast
-  // as they appear to light up (false = Maya's plain fade, which reads as lingering)
-  sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 160, outStep: 1.8, ramp: 16, reverse: false, speed: 0.4, mirrorOut: true },
+  // each fading up over `ramp` frames, all held, then one after another fading out the same way. This is the C's (and
+  // the line's) sweep, as on the other pages
+  sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 210, outStep: 1.0, ramp: 16, reverse: false },
+  // the sweep once the grid wall has formed (it takes over from `sweep` as the grid forms, and hands back as it breaks
+  // up): the tubes and the grid on the blocks together. `speed`: how fast it plays (1 = as in Maya, lower = slower);
+  // going out at the same pace as lighting up (outStep = inStep); `mirrorOut`: the tubes go out as fast as they appear
+  // to light up (false = Maya's plain fade, which reads as lingering)
+  wallSweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 160, outStep: 1.8, ramp: 16, reverse: false, speed: 0.4, mirrorOut: true },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
   // section then plays the line and the grid wall, and the finished grid stays on screen for the last `end` before the
   // section scrolls away. `smooth`: seconds it takes to catch up with the scroll
@@ -361,8 +365,8 @@ async function start(box) {
   }
 
   // ---- the sweep (Maya's level(i, f, n))
-  const S = CFG.sweep;
-  function level(i, f) {
+  const S = CFG.sweep, W = CFG.wallSweep || CFG.sweep;
+  function level(S, i, f) {
     const k = S.reverse ? C.n - 1 - i : i;
     const a = S.inStart + S.inStep * k, b = S.outStart + S.outStep * k;
     // going out mirrors how lighting up looks: a tube reads as lit from its first glimmer, so it's made to read as out
@@ -502,19 +506,19 @@ async function start(box) {
       // along a row, which way does the next square in the tubes' order sit (so the band runs on through the gaps)
       const dx = [];
       for (let i = 0; i + 1 < C.n; i++) {
-        const a = S.reverse ? i + 1 : i, b = S.reverse ? i : i + 1;
+        const a = W.reverse ? i + 1 : i, b = W.reverse ? i : i + 1;
         if (rows[a] === rows[b] && Math.abs(Math.abs(P[b][0] - P[a][0]) - pitch) < 0.2 * pitch) dx.push(Math.sign(P[b][0] - P[a][0]));
       }
       const dir = dx.reduce((s, v) => s + v, 0) >= 0 ? 1 : -1;
       const L = CFG.lines;
       const sp = Math.max(L.speed, 0.05);
-      LN.uWv.value.set(0, S.inStart, S.inStep / sp, S.outStart);   // the band's front: as each tube starts lighting / going out
-      LN.uWv2.value.set(S.outStep / sp, Math.min(Math.max(L.rise / L.length, 0), 1), dir / pitch, L.off);
+      LN.uWv.value.set(0, W.inStart, W.inStep / sp, W.outStart);   // the band's front: as each tube starts lighting / going out
+      LN.uWv2.value.set(W.outStep / sp, Math.min(Math.max(L.rise / L.length, 0), 1), dir / pitch, L.off);
       // the band's length and the softness of its front and tail, in frames of the sweep (the tubes' pace, lighting / going out)
-      const on = S.inStep / sp, off = S.outStep / sp;
+      const on = W.inStep / sp, off = W.outStep / sp;
       LN.uLnB.value.set(L.length * on, Math.max(L.edge * on, 0.01), L.length * off, Math.max(L.edge * off, 0.01));
       LN.uLnX.value.set(tub ? ((inner + outer) / 2 - inner) / (2 * inner) * L.cells : 0, L.strength, L.dim);
-      LN.uWv3.value.set(C.n, S.reverse ? 1 : 0, -1, S.loop);
+      LN.uWv3.value.set(C.n, W.reverse ? 1 : 0, -1, W.loop);
       lines = {
         update(w, f) {
           // how close every square is to its place in the grid: the grid only shows once they're all there
@@ -530,6 +534,7 @@ async function start(box) {
           LN.uLn.value.set(L.width * renderer.getPixelRatio(), inner, L.cells, on);
           LN.uWv.value.x = f;
           LN.uWv3.value.z = forceGlow !== null ? forceGlow : -1;
+          return on;
         },
       };
     }
@@ -546,7 +551,7 @@ async function start(box) {
   }
   function draw() {
     const fLoop = still ? 0 : (clock * C.fps) % PL;
-    const fSweep = (clock * C.fps * (S.speed || 1)) % S.loop;
+    const fSweep = (clock * C.fps * (S.speed || 1)) % S.loop, fWall = (clock * C.fps * (W.speed || 1)) % W.loop;
     const span = 1 - CFG.scroll.hold - CFG.scroll.end;
     const u = Math.min(1, Math.max(0, (sNow - CFG.scroll.hold) / span));
     const w = smoothstep(u * span / CFG.scroll.blend);
@@ -555,8 +560,11 @@ async function start(box) {
       matAt(i, fLoop, fScroll, w);
       for (const m of meshes) m.setMatrixAt(i, M);
       inst[i].copy(M);
-      glow.array[i] = forceGlow !== null ? forceGlow : still ? 0 : level(i, fSweep);
     }
+    // the C's sweep, handing over to the wall's as the grid forms
+    const hand = lines ? lines.update(w, fWall) : 0;
+    for (let i = 0; i < C.n; i++) glow.array[i] = forceGlow !== null ? forceGlow : still ? 0 :
+      level(S, i, fSweep) + (level(W, i, fWall) - level(S, i, fSweep)) * hand;
     for (let i = 0; i < C.n; i++) {                // the square above each square (the neighbour sitting higher)
       const y = inst[i].elements[13];
       const a = i + 1 < C.n && inst[i + 1].elements[13] > y ? i + 1 : i > 0 && inst[i - 1].elements[13] > y ? i - 1 : -1;
@@ -567,7 +575,6 @@ async function start(box) {
     glow.needsUpdate = true;
     for (const a of occ) a.needsUpdate = true;
     if (fixed) frameFixed(fScroll, w); else frame(smoothstep(u / 0.35));
-    if (lines) lines.update(w, fSweep);
     renderer.render(scene, camera);
     if (!shown) {
       shown = true;
