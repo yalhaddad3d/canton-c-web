@@ -504,6 +504,13 @@ async function start(box) {
       const gA = lightAt(Math.abs(yA) / P, sec), gB = lightAt(Math.abs(yB) / P, sec);
       if (j === 0 && exch) {
         const u = fr / E;
+        // the shading from above follows the blocks actually there: until they're halfway across, the block under each
+        // slot is still shaded by the block leaving it (fading as that slides away), and each travelling block by the one
+        // above where it came from; past halfway, by the arriving ones (both are far off by then, so nothing jumps)
+        const iAb = md(-1 + fo), iBb = NJ + md(-1 - fo), iA1 = md(1 + fo), iB1 = NJ + md(1 - fo), early = u < 0.5;
+        if (J > 0) { above[iAb] = early ? iB : iA; above[iBb] = early ? iA : iB; }
+        above[iA] = early ? iB1 : iA1;
+        above[iB] = early ? iA1 : iB1;
         // the front tower's block swings out in front (towards the camera), the back tower's out behind, so neither ever
         // passes through a tower
         const fz = (side) => side === (T.front || 1) ? 1 : -1;
