@@ -50,25 +50,28 @@ const CFG = {
   spill: { color: [0.12, 0.19, 0.0], reach: 0.07, amount: 0.2 },   // amount: 1 = as in the Arnold render
   background: null,          // null = see-through (the section shows behind; your render's background is #10100E)
   maxPixelRatio: 2,
-  // the camera: orthographic, looking down at the towers from `elevation` degrees above, turned `azimuth` degrees round
-  // them; `height`: how many blocks tall the view is; `shiftX`: moves the towers sideways on screen (share of the width,
-  // + = right), e.g. to leave room for text
-  camera: { elevation: 24, azimuth: 32, height: 12, shiftX: 0.12, shiftY: 0.12 },
-  // the towers (like the reference): side by side and nearly straight above the exchange, `gap` apart there (share of a
-  // block), spreading a touch (`splay`) towards the top; below it the left tower curves across (`cross`) and back behind
-  // (`depth`) the right one, which drifts a little left (`drift`); all in shares of a block, over about `bendLength`
-  // blocks. `spacing` between blocks in a tower (multiple of a block's thickness); `twist`: degrees each block turns from
-  // the one below (the two towers twist opposite ways); `out`: how far the exchanging blocks swing out of the towers to
-  // pass each other (share of a block); `swing`: how much they turn as they go (degrees); `flip`: turns the blocks over
-  towers: { gap: 0.6, splay: 0.2, cross: 0.5, depth: 0.6, drift: 0.25, bendLength: 4, spacing: 1.35, twist: 4, out: 1.1, swing: 18, flip: false },
+  // the camera: looking down at the towers from `elevation` degrees above, turned `azimuth` degrees round them, with a
+  // `fov`-degree lens (a long lens: little distortion, but the near tower reads bigger); `height`: how many blocks tall
+  // the view is; `shiftX` / `shiftY`: move the towers on screen (shares of the width / height), e.g. to leave room for text
+  camera: { elevation: 24, azimuth: 32, fov: 22, height: 18, shiftX: 0.12, shiftY: 0 },
+  // the towers bow apart in one even, round arc from top to bottom: widest at the exchange height, `gap` apart there
+  // (share of a block), curving back in towards each other all the way to the top and bottom of the view, where they're
+  // about `pinch` apart (`arc`: how far past the edge of the view the arc would close; higher = gentler, flatter).
+  // `depth`: how far apart they sit front to back (in blocks): the `front` tower (1 = right, -1 = left) in the
+  // foreground, the other in the middle ground. `spacing` between blocks
+  // in a tower (multiple of a block's thickness); `twist`: degrees each block turns from the one below (the two towers
+  // twist opposite ways); `out`: how far the exchanging blocks swing out to pass each other (share of a block); `swing`:
+  // how much they turn as they go (degrees); `flip`: turns the blocks over
+  towers: { gap: 2.6, pinch: 0.3, arc: 1.1, depth: 3, front: 1, spacing: 1.35, twist: 1.5, out: 1.1, swing: 18, flip: false },
   // the motion: the towers glide continuously (left down, right up), `blocks` blocks every `cycle` seconds; once a cycle
   // the blocks reaching the exchange height swap towers on the way, over `exchange` seconds (one swings round the front,
   // the other round the back, while both towers carry on)
   motion: { cycle: 12, blocks: 2, exchange: 2.2 },
-  // as each exchange lands, both towers light up in a sweep from the exchange outwards and go out the same way, like the
-  // C (in frames at 24 fps after it lands, by distance from the exchange in blocks): lighting `inStep` frames per block,
-  // each fading up over `ramp`; going out from `outStart`, `outStep` frames per block
-  sweep: { inStep: 5, outStart: 150, outStep: 3, ramp: 16 },
+  // as each exchange lands, both towers light up in a sweep from the exchange outwards and go out the same way, with the
+  // C's own sweep timing (in frames at 24 fps after it lands, by distance from the exchange in blocks): one block every
+  // `inStep` frames, each fading up over `ramp` (so several are fading up at once, a soft travelling front); going out
+  // from `outStart`, one block every `outStep` frames, each fading out over `ramp`
+  sweep: { inStep: 1.8, outStart: 190, outStep: 1.0, ramp: 16 },
 };
 
 document.querySelectorAll(".c3d[data-src]").forEach((box) => {
@@ -308,37 +311,52 @@ async function start(box) {
   let tk = 0;
   for (const p of C.parts) for (let k = 0; k < p.pos.length; k += 3) tk = Math.max(tk, Math.abs(p.pos[k] * nAx.x + p.pos[k + 1] * nAx.y + p.pos[k + 2] * nAx.z));
   const size = 2 * half, P = Math.max(T.spacing, 1.05) * 2 * tk;      // block size, and the height from one block to the next
-  const X0 = size / 2 + T.gap * size / 2;                           // each tower's centre at the exchange height
-  // a tower's centre at height y (side -1: left, +1: right)
-  const bendL = Math.max(T.bendLength, 0.5) * P, sq = (q) => q * q / (1 + q * q);
-  const xOf = (y, side) => y >= 0 ? side * (X0 + T.splay * size * sq(y / bendL))
-    : side < 0 ? -X0 + T.cross * size * sq(-y / bendL) : X0 - T.drift * size * sq(-y / bendL);
-  const zOf = (y, side) => y < 0 && side < 0 ? -T.depth * size * sq(-y / bendL) : 0;
+  // a tower's centre at height y (side -1: left, +1: right): widest apart at the exchange height, curving back in above
+  // and below
+  const Xin = size / 2 + T.pinch * size / 2, X0 = size / 2 + T.gap * size / 2;
+  let bendL = 10 * P;                                              // set by the framing (see frameCamera)
+  // one even arc from top to bottom (curving the same amount all the way, no straight parts): widest at the exchange,
+  // reaching `pinch` apart just past the top and bottom of the view (past that, out of sight, they stay put)
+  const xOf = (y, side) => { const q = Math.min(Math.abs(y) / bendL, 1); return dOf(side) * Math.sin(az) + side * (Xin + (X0 - Xin) * (1 - q * q)); };
+  // front to back: the front tower nearer the camera, the other further away (along the camera's direction)
+  const dOf = (side) => (side === (T.front || 1) ? 0.5 : -0.5) * (T.depth || 0) * size;
   const UP = new THREE.Vector3(0, 1, 0), qY = new THREE.Quaternion(), pos = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1), M = new THREE.Matrix4();
   const ease = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * x * (x * (6 * x - 15) + 10); };
 
   // the camera
-  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+  const camera = new THREE.PerspectiveCamera(CFG.camera.fov || 22, 1, 0.1, 5000);
   const el = THREE.MathUtils.degToRad(CFG.camera.elevation), az = THREE.MathUtils.degToRad(CFG.camera.azimuth), D = 200;
   camera.position.set(D * Math.cos(el) * Math.sin(az), D * Math.sin(el), D * Math.cos(el) * Math.cos(az));
   camera.lookAt(0, 0, 0);
+  const zOf = (y, side) => dOf(side) * Math.cos(az);
+  const back = camera.position.clone().normalize(), target = new THREE.Vector3();
   let aspect = 1, J = 8;
   camera.updateMatrixWorld();
   const cR = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0), cU = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
   function frameCamera() {
-    // how wide the towers are on screen over the height in view (their centres, plus a block's reach either side)
-    let hh = CFG.camera.height * P / 2;
-    const yv = hh / Math.cos(el) + P, v = new THREE.Vector3();
-    let x0 = 1e9, x1 = -1e9;
-    for (let y = -yv; y <= yv; y += P / 2) for (const sd of [-1, 1]) {
-      const sx = v.set(xOf(y, sd), y, zOf(y, sd)).dot(cR);
-      x0 = Math.min(x0, sx - 0.8 * size); x1 = Math.max(x1, sx + 0.8 * size);
+    // how wide the towers are on screen over the height in view (their centres, plus a block's reach either side); the
+    // arc is fitted to the height in view, so it runs from the very top to the very bottom whatever the screen
+    let hh = CFG.camera.height * P / 2, x0 = 1e9, x1 = -1e9;
+    const v = new THREE.Vector3();
+    for (let pass = 0; pass < 3; pass++) {
+      const yv = hh / Math.cos(el);
+      bendL = yv * (1 + 2 * Math.abs(CFG.camera.shiftY || 0)) * (T.arc || 1.1);
+      x0 = 1e9; x1 = -1e9;
+      for (let y = -yv - P; y <= yv + P; y += P / 2) for (const sd of [-1, 1]) {
+        const sx = v.set(xOf(y, sd), y, zOf(y, sd)).dot(cR);
+        x0 = Math.min(x0, sx - 0.8 * size); x1 = Math.max(x1, sx + 0.8 * size);
+      }
+      x0 = Math.min(x0, -(X0 + 0.8 * size) * Math.cos(az) - T.out * size * Math.sin(az));
+      x1 = Math.max(x1, (X0 + 0.8 * size) * Math.cos(az) + T.out * size * Math.sin(az));
+      hh = Math.max(CFG.camera.height * P / 2, (x1 - x0) / 2 / Math.max(aspect, 1e-3) / (1 - 2 * Math.abs(CFG.camera.shiftX || 0)));
     }
-    x0 = Math.min(x0, -(X0 + 0.8 * size) * Math.cos(az) - T.out * size * Math.sin(az));
-    x1 = Math.max(x1, (X0 + 0.8 * size) * Math.cos(az) + T.out * size * Math.sin(az));
-    hh = Math.max(hh, (x1 - x0) / 2 / Math.max(aspect, 1e-3) / (1 - 2 * Math.abs(CFG.camera.shiftX || 0)));
     const hw = hh * aspect, cx = (x0 + x1) / 2 - (CFG.camera.shiftX || 0) * 2 * hw, cy = -(CFG.camera.shiftY || 0) * 2 * hh;
-    Object.assign(camera, { top: cy + hh, bottom: cy - hh, left: cx - hw, right: cx + hw });
+    // the long lens framed to show that much at the towers: back off until the view is hh high there, aimed at (cx, cy)
+    const dist = hh / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+    target.copy(cR).multiplyScalar(cx).addScaledVector(cU, cy);
+    camera.position.copy(target).addScaledVector(back, dist);
+    camera.near = Math.max(0.1, dist - 60 * size); camera.far = dist + 60 * size;
+    camera.aspect = aspect;
     camera.updateProjectionMatrix();
     // enough blocks above and below to fill the view (the ones that wrap round are out of sight)
     J = Math.min(Math.floor((NI / 2 - 1) / 2), Math.ceil((hh * (1 + 2 * Math.abs(CFG.camera.shiftY || 0)) / Math.cos(el) + size) / P) + 2);
