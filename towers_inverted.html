@@ -38,7 +38,7 @@ const CFG = {
   brightness: 1.0,           // a lit tube's brightness, keeping its yellow (1 = as bright as the Arnold render)
   // the blocks' noise (like the noise in the C material, stuck to each block as it moves; each block its own):
   // amount = contrast of the noise, lift = how much it brightens the darkest faces, scale = noise cells per unit
-  grain: { amount: 0.25, lift: 0.002, scale: 72 },
+  grain: { amount: 0.08, lift: 0.0, scale: 40 },   // softer than the black blocks': fine speckle shows up hard on yellow
   // the glass when it's off: how see-through it is facing you (Arnold's transmission 0.75), and how quickly it turns
   // into reflection toward its edges (higher = thinner reflective rim)
   glass: { clear: 0.75, edge: 3.0 },
@@ -52,9 +52,9 @@ const CFG = {
   maxPixelRatio: 2,
   // the colours swapped: the blocks take the neon's yellow (`color`, a painted yellow lit by the same sky: `ambient`
   // + `light` on the faces turned up to the sky, plus the C material's reflections at `shine`) and the tubes take the
-  // blocks' black/grey. When the sweep lights a tower, its blocks glow up to the lit neon's yellow (`glow`: how far)
-  // `shadow`: how dark a block's top gets under the one above (the black blocks' 0.9 turns yellow muddy)
-  invert: { color: [0.80, 0.78, 0.12], ambient: 0.45, light: 0.6, shine: 1.0, glow: 0.6, shadow: 0.4 },
+  // blocks' black/grey; when the sweep lights a tower its tubes light up, from black/grey to the lit neon. `shadow`:
+  // how dark a block's top gets under the one above (the black blocks' 0.9 turns yellow muddy)
+  invert: { color: [0.80, 0.78, 0.12], ambient: 0.45, light: 0.6, shine: 1.0, shadow: 0.4 },
   // the camera: looking down at the towers from `elevation` degrees above, turned `azimuth` degrees round them, with a
   // `fov`-degree lens (a long lens: little distortion, but the near tower reads bigger); `height`: how many blocks tall
   // the view is; `shiftX` / `shiftY`: move the towers on screen (shares of the width / height), e.g. to leave room for text
@@ -237,7 +237,7 @@ async function start(box) {
       uSpill: { value: new THREE.Color().fromArray(CFG.spill.color).multiplyScalar(CFG.spill.amount) }, uReach: { value: CFG.spill.reach * half } });
     withGlow(sh, true);
     if (IV) Object.assign(sh.uniforms, { uInvC: { value: new THREE.Vector3().fromArray(IV.color) },
-      uInvK: { value: new THREE.Vector4(IV.ambient, IV.light, IV.shine, IV.glow) },
+      uInvK: { value: new THREE.Vector4(IV.ambient, IV.light, IV.shine, 0) },
       uNeon: { value: new THREE.Color(0xeff26d).convertSRGBToLinear() } });
     sh.vertexShader = "varying float vInst;\nattribute vec4 aOccA, aOccB, aOccC, aOccD;\nvarying vec3 vOccL;\n" +
       sh.vertexShader.replace("vGlow = aGlow;", "vGlow = aGlow;\nvInst = float( gl_InstanceID );\n" +
@@ -264,8 +264,7 @@ async function start(box) {
       "float edge = - rsq( vec2( dot( vLocal, uU ), dot( vLocal, uV ) ), uHalf, uRound.x );\n" +
       "float face = smoothstep( 0.6, 0.9, abs( dot( normalize( vLocalN ), uN ) ) );\n" +
       "outgoingLight += vGlow * face * uSpill * exp( - max( edge, 0.0 ) / uReach );" +
-      // inverted: lit by the sweep, the block glows up towards the lit neon's yellow
-      (IV ? "\noutgoingLight = mix( outgoingLight, uNeon, clamp( vGlow, 0.0, 1.0 ) * uInvK.w );" : ""));
+      "");
   };
   // the glass: its reflections added on top, what's behind showing through (less toward its edges); lit, it's solid
   const tubeMat = new THREE.MeshMatcapMaterial({ matcap: tubeTex, transparent: true, depthWrite: false,
@@ -286,11 +285,21 @@ async function start(box) {
       "                        texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );\n" +
       "matcapColor.rgb *= mix( 1.0, uBright, clamp( vGlow, 0.0, 1.0 ) );");
   };
-  // inverted: the tubes in the blocks' black/grey (their shading sphere, read the same way), solid
+  // inverted: the tubes in the blocks' black/grey (their shading sphere, read the same way), solid; lit by the sweep they
+  // light up to the neon (the lit glass's own shading spheres), the way the tubes light on the other pages
   let tubeDark = null;
   if (IV) {
     tubeDark = new THREE.MeshMatcapMaterial({ matcap: blockTex });
-    tubeDark.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace("vec3 viewDir = normalize( vViewPosition );", ORTHO); };
+    tubeDark.onBeforeCompile = (sh) => {
+      Object.assign(sh.uniforms, { uLit: { value: tubeTex }, uLevels: { value: CFG.look.levels }, uGl: { value: Math.max(CFG.glow, 1e-3) }, uBright: { value: CFG.brightness } });
+      withGlow(sh, false);
+      sh.fragmentShader = "uniform sampler2D uLit;\nuniform float uLevels, uGl, uBright;\n" + sh.fragmentShader.replace(
+        "vec4 matcapColor = texture2D( matcap, uv );",
+        "vec4 matcapColor = texture2D( matcap, uv );\n" +
+        "float g = clamp( vGlow, 0.0, 1.0 ), lv = clamp( vGlow * uGl, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );\n" +
+        "vec4 lit = mix( texture2D( uLit, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ), texture2D( uLit, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );\n" +
+        "matcapColor.rgb = mix( matcapColor.rgb, lit.rgb * mix( 1.0, uBright, g ), smoothstep( 0.0, 0.35, g ) );");
+    };
   }
   const mats = [blockMat, IV ? tubeDark : tubeMat];
   const NI = 160;                              // instance capacity (the towers use what the view needs)
