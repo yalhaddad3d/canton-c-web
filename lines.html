@@ -78,8 +78,9 @@ const CFG = {
   // the sweep once the grid wall has formed (it takes over from `sweep` as the grid forms, and hands back as it breaks
   // up): the tubes and the grid on the blocks together. `speed`: how fast it plays (1 = as in Maya, lower = slower);
   // going out at the same pace as lighting up (outStep = inStep); `mirrorOut`: the tubes go out as fast as they appear
-  // to light up (false = Maya's plain fade, which reads as lingering)
-  wallSweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 160, outStep: 1.8, ramp: 16, reverse: false, speed: 0.4, mirrorOut: true },
+  // to light up (false = Maya's plain fade, which reads as lingering). `loop` is set so the next lighting wave sets off
+  // just as the last tubes go out (no long dark pause between cycles)
+  wallSweep: { loop: 248, inStart: 20, inStep: 1.8, outStart: 160, outStep: 1.8, ramp: 16, reverse: false, speed: 0.4, mirrorOut: true },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
   // section then plays the line and the grid wall, and the finished grid stays on screen for the last `end` before the
   // section scrolls away. `smooth`: seconds it takes to catch up with the scroll
@@ -366,7 +367,9 @@ async function start(box) {
 
   // ---- the sweep (Maya's level(i, f, n))
   const S = CFG.sweep, W = CFG.wallSweep || CFG.sweep;
-  function level(S, i, f) {
+  // (a cycle can run past the end of its loop: what's past the end carries on at the start of the next one)
+  function level(S, i, f) { return Math.max(level1(S, i, f), level1(S, i, f + S.loop)); }
+  function level1(S, i, f) {
     const k = S.reverse ? C.n - 1 - i : i;
     const a = S.inStart + S.inStep * k, b = S.outStart + S.outStep * k;
     // going out mirrors how lighting up looks: a tube reads as lit from its first glimmer, so it's made to read as out
