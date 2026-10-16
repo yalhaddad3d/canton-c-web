@@ -61,13 +61,14 @@ const CFG = {
   // `depth`: how far apart they sit front to back (in blocks): the `front` tower (1 = right, -1 = left) in the
   // foreground, the other in the middle ground. `spacing` between blocks
   // in a tower (multiple of a block's thickness); `twist`: degrees each block turns from the one below (the two towers
-  // twist opposite ways); `out`: how far the exchanging blocks swing out to pass each other (share of a block); `swing`:
+  // twist opposite ways); `out`: how far the exchanging blocks swing out to pass each other (share of a block); `accel`:
+  // how much of the exchange they spend easing up to speed and back down (the rest is one steady glide); `swing`:
   // how much they turn as they go (degrees); `flip`: turns the blocks over
-  towers: { gap: 1.6, pinch: 0.3, arc: 1.15, round: 0.7, depth: 3, front: 1, spacing: 1.35, twist: 0.6, out: 1.6, swing: 18, flip: false },
+  towers: { gap: 1.6, pinch: 0.3, arc: 1.15, round: 0.7, depth: 3, front: 1, spacing: 1.35, twist: 0.6, out: 1.6, swing: 18, accel: 0.35, flip: false },
   // the motion: the towers glide continuously (left down, right up), `blocks` blocks every `cycle` seconds; once a cycle
   // the blocks reaching the exchange height swap towers on the way, over `exchange` seconds (one swings round the front,
   // the other round the back, while both towers carry on)
-  motion: { cycle: 10, blocks: 2, exchange: 2.4 },
+  motion: { cycle: 10, blocks: 2, exchange: 3.4 },
   // as each exchange lands, both towers light up in a sweep from the exchange outwards and go out the same way, with the
   // C's own sweep timing (in frames at 24 fps after it lands, by distance from the exchange in blocks): one block every
   // `inStep` frames, each fading up over `ramp` (so several are fading up at once, a soft travelling front); going out
@@ -415,6 +416,13 @@ async function start(box) {
   // far out, clear of both towers), rounds another and slides straight into the other tower; it moves along that path at one smooth pace (easing
   // in at the start and out at the end only), turning a little on the way. (lateral: across the screen; depth: towards
   // the camera)
+  // its pace along the path: eases up to speed over the first `accel` of it, glides at that steady speed, and eases to a
+  // stop over the last `accel` (a steady glide, rather than speeding through the middle)
+  const GT = new Float32Array(129);
+  { const a = Math.min(Math.max(T.accel || 0.35, 0.05), 0.5); let acc = 0;
+    for (let k = 1; k <= 128; k++) { const q = (k - 0.5) / 128; acc += smoothstep(q / a) * smoothstep((1 - q) / a); GT[k] = acc; }
+    for (let k = 1; k <= 128; k++) GT[k] /= acc; }
+  const glide = (u) => { const q = Math.min(Math.max(u, 0), 1) * 128, k = Math.min(Math.floor(q), 127); return GT[k] + (GT[k + 1] - GT[k]) * (q - k); };
   const PT = [];
   for (let k = 0; k < 40; k++) PT.push([0, 0]);
   function pathAt(s0, pts, n) {                                       // the point at arc length s0 along pts[0..n)
@@ -442,7 +450,7 @@ async function start(box) {
     PT[n][0] = Lt; PT[n++][1] = Dt;
     let len = 0;
     for (let k = 1; k < n; k++) len += Math.hypot(PT[k][0] - PT[k - 1][0], PT[k][1] - PT[k - 1][1]);
-    const [L, D] = pathAt(ease(u) * len, PT, n);
+    const [L, D] = pathAt(glide(u) * len, PT, n);
     // height and turn follow how far across it is (so it doesn't drift up or down while sliding in or out)
     const b = Math.abs(Lt - Lf) > 1e-6 ? Math.min(Math.max((L - Lf) / (Lt - Lf), 0), 1) : ease(u);
     const y = yFrom + yOf(sFrom) + (yTo + yOf(sTo) - yFrom - yOf(sFrom)) * b;
