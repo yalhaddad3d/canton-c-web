@@ -67,8 +67,10 @@ const CFG = {
   // `haloWidth` CSS pixels wide; `strength`: how bright (1 = the tubes' yellow); `flicker`: how much they dip while lit
   // (0 = steady); `flickerSpeed`: how lively the flicker is. As the wave reaches a connector it sweeps across, from one
   // block to the next, over `draw` seconds, coming on at `dim` and fading up to full; going out, it sweeps back down to
-  // `dim` the same way and fades away. `edge`: how soft the sweeping front is (share of the connector). null = none
-  connect: { length: 1.1, width: 1.25, halo: 0.35, haloWidth: 3, strength: 1.0, flicker: 0.35, flickerSpeed: 1.0, draw: 0.5, dim: 0.15, edge: 0.25 },
+  // `dim` the same way and fades away. `edge`: how soft the sweeping front is (share of the connector). `fadeIn`: over
+  // how much of the scroll animation (after the grid has formed) they fade in as you scroll, and out as you scroll back.
+  // null = none
+  connect: { length: 1.1, width: 1.25, halo: 0.35, haloWidth: 3, strength: 1.0, flicker: 0.35, flickerSpeed: 1.0, draw: 0.5, dim: 0.15, edge: 0.25, fadeIn: 0.08 },
   // the tubes on the grid wall: `wall`: true = they light up with the connectors (and flicker with them, by `flicker`),
   // false = they stay off on the wall (the C and the line keep their sweep either way)
   tubes: { wall: true, flicker: 0.3 },
@@ -597,10 +599,14 @@ async function start(box) {
       wall = {
         form,
         // where the grid is now, how formed it is (0..1, which the connectors fade in with), and the connectors' light
-        update(w, f, t) {
+        update(w, f, t, fs) {
           for (let i = 0; i < C.n; i++) { X[i] = inst[i].elements[12]; Z[i] = inst[i].elements[14]; }
           const g = gridErr(X, Z);
-          const on = still && forceGlow === null ? 0 : w * (1 - smoothstep((g.err - 0.01) / 0.04));
+          // they fade in over the stretch of scroll just after the grid has formed (`connect.fadeIn`, a share of the
+          // scroll animation), easing in time too (see loop), so scrolling a little never makes them pop
+          conTo = still && forceGlow === null ? 0 : w * smoothstep((fs - form) / Math.max((K && K.fadeIn !== undefined ? K.fadeIn : 0.08) * PS, 1));
+          if (handSnap) conOn = conTo;
+          const on = conOn;
           if (!quad) return on;
           quad.visible = on > 0.001;
           if (!quad.visible) return on;
@@ -628,7 +634,7 @@ async function start(box) {
   const inst = Array.from({ length: C.n }, () => new THREE.Matrix4()), INV = new THREE.Matrix4();
   const FAR = new THREE.Matrix4().makeTranslation(1e4, 1e4, 1e4);   // "nothing above": far away
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let clock = 0, last = 0, running = false, shown = false, sNow = progress(), forceGlow = null, hand = 0, handTo = 0, handSnap = true;
+  let clock = 0, last = 0, running = false, shown = false, sNow = progress(), forceGlow = null, hand = 0, handTo = 0, handSnap = true, conOn = 0, conTo = 0;
   function progress() {
     const r = track.getBoundingClientRect(), span = r.height - innerHeight;
     return span > 0 ? Math.min(1, Math.max(0, -r.top / span)) : 0;
@@ -655,7 +661,7 @@ async function start(box) {
     glow.needsUpdate = true;
     for (const a of occ) a.needsUpdate = true;
     if (fixed) frameFixed(fScroll, w); else frame(smoothstep(u / 0.35));
-    if (wall) wall.update(w, fWall, clock);
+    if (wall) wall.update(w, fWall, clock, fScroll);
     // the C's sweep hands over to the wall's once the grid has formed, and only hands back once you've scrolled well back
     // into the line (so scrolling a little never flips it); the handover eases in over a moment
     if (!wall || w < 0.5 || fScroll < wall.form - 0.15 * PS) handTo = 0;
@@ -692,6 +698,7 @@ async function start(box) {
     last = now;
     if (!still) clock += dt;
     hand += (handTo - hand) * (1 - Math.exp(-dt / 0.6));
+    conOn += (conTo - conOn) * (1 - Math.exp(-dt / 0.35));
     const d = progress() - sNow;
     sNow += CFG.scroll.smooth > 0 ? d * (1 - Math.exp(-dt / CFG.scroll.smooth)) : d;
     if (still && Math.abs(d) < 1e-4) return;
