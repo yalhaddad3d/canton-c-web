@@ -63,16 +63,16 @@ const CFG = {
   // in a tower (multiple of a block's thickness); `twist`: degrees each block turns from the one below (the two towers
   // twist opposite ways); `out`: how far the exchanging blocks swing out to pass each other (share of a block); `swing`:
   // how much they turn as they go (degrees); `flip`: turns the blocks over
-  towers: { gap: 1.6, pinch: 0.3, arc: 1.15, round: 0.7, depth: 3, front: 1, spacing: 1.35, twist: 0.6, out: 1.1, swing: 18, flip: false },
+  towers: { gap: 1.6, pinch: 0.3, arc: 1.15, round: 0.7, depth: 3, front: 1, spacing: 1.35, twist: 0.6, out: 1.6, swing: 18, flip: false },
   // the motion: the towers glide continuously (left down, right up), `blocks` blocks every `cycle` seconds; once a cycle
   // the blocks reaching the exchange height swap towers on the way, over `exchange` seconds (one swings round the front,
   // the other round the back, while both towers carry on)
-  motion: { cycle: 12, blocks: 2, exchange: 2.2 },
+  motion: { cycle: 10, blocks: 2, exchange: 2.4 },
   // as each exchange lands, both towers light up in a sweep from the exchange outwards and go out the same way, with the
   // C's own sweep timing (in frames at 24 fps after it lands, by distance from the exchange in blocks): one block every
   // `inStep` frames, each fading up over `ramp` (so several are fading up at once, a soft travelling front); going out
   // from `outStart`, one block every `outStep` frames, each fading out over `ramp`
-  sweep: { inStep: 1.8, outStart: 190, outStep: 1.0, ramp: 16 },
+  sweep: { inStep: 1.8, outStart: 110, outStep: 1.0, ramp: 16 },
 };
 
 document.querySelectorAll(".c3d[data-src]").forEach((box) => {
@@ -410,13 +410,20 @@ async function start(box) {
   // old slot (yFrom, moving) and eases over to its new one (yTo, moving the other way), swinging out (zs: in front or
   // behind) and turning a little as it goes, all in one smooth curve
   const sw = THREE.MathUtils.degToRad(T.swing || 0);
+  // It slides straight out of its tower like a drawer (towards the camera from the front tower, away from it from the
+  // back one, square to the gap and not turning), so it never touches the blocks above and below; once clear it travels
+  // across (turning a little as it goes), comes to the other tower's depth while still clear of it, and slides straight
+  // in. Each part flows into the next. (lateral: across the screen; depth: towards the camera)
   function hop(i, u, yFrom, sFrom, yTo, sTo, zs, g) {
-    const k = ease(u), bell = Math.pow(Math.sin(Math.PI * u), 2);
-    const y = yFrom + yOf(sFrom) + (yTo + yOf(sTo) - yFrom - yOf(sFrom)) * k;
-    const x = xOf(yFrom, sFrom) + (xOf(yTo, sTo) - xOf(yFrom, sFrom)) * k;
-    const z = zOf(yFrom, sFrom) + (zOf(yTo, sTo) - zOf(yFrom, sFrom)) * k + zs * T.out * size * bell;
-    const yaw = (sFrom * -tw * yFrom / P) * (1 - k) + (sTo * -tw * yTo / P) * k + zs * sw * Math.sin(Math.PI * u);
-    put(i, x, y, yaw, g, z);
+    const o = ease(u / 0.3) * (1 - ease((u - 0.7) / 0.3));            // how far out (0..1)
+    const k1 = ease((u - 0.18) / 0.42), k2 = ease((u - 0.36) / 0.36);  // across, then to the other tower's depth
+    const xf = xOf(yFrom, sFrom), zf = zOf(yFrom, sFrom), xt = xOf(yTo, sTo), zt = zOf(yTo, sTo);
+    const Lf = xf * Math.cos(az) - zf * Math.sin(az), Df = xf * Math.sin(az) + zf * Math.cos(az);
+    const Lt = xt * Math.cos(az) - zt * Math.sin(az), Dt = xt * Math.sin(az) + zt * Math.cos(az);
+    const L = Lf + (Lt - Lf) * k1, D = Df + (Dt - Df) * k2 + zs * T.out * size * o;
+    const y = yFrom + yOf(sFrom) + (yTo + yOf(sTo) - yFrom - yOf(sFrom)) * k1;
+    const yaw = (sFrom * -tw * yFrom / P) * (1 - k1) + (sTo * -tw * yTo / P) * k1 + zs * sw * Math.sin(Math.PI * k1) * o * o;
+    put(i, L * Math.cos(az) + D * Math.sin(az), y, yaw, g, -L * Math.sin(az) + D * Math.cos(az));
   }
   function layout(t) {
     const o = t / S, fo = Math.floor(o), fr = o - fo;                // blocks travelled so far (left down, right up)
@@ -433,8 +440,11 @@ async function start(box) {
       const gA = lightAt(Math.abs(yA) / P, sec), gB = lightAt(Math.abs(yB) / P, sec);
       if (j === 0 && exch) {
         const u = fr / E;
-        hop(iA, u, yB, 1, yA, -1, -1, gA);                            // the right tower's block, round the back, into the left
-        hop(iB, u, yA, -1, yB, 1, 1, gB);                             // the left tower's block, round the front, into the right
+        // the front tower's block swings out in front (towards the camera), the back tower's out behind, so neither ever
+        // passes through a tower
+        const fz = (side) => side === (T.front || 1) ? 1 : -1;
+        hop(iA, u, yB, 1, yA, -1, fz(1), gA);                         // the right tower's block, into the left
+        hop(iB, u, yA, -1, yB, 1, fz(-1), gB);                        // the left tower's block, into the right
       } else {
         put(iA, xOf(yA, -1), yA + yOf(-1), tw * yA / P, gA, zOf(yA, -1));
         put(iB, xOf(yB, 1), yB + yOf(1), -tw * yB / P, gB, zOf(yB, 1));
