@@ -64,13 +64,14 @@ const CFG = {
   // a fine grid on each block's face (inside its tube) once the grid wall has formed: `cells` across each block, lines
   // `width` CSS pixels thin, reaching in under the tube. It's lit by a band of light that travels through the wall in
   // the tubes' order, setting off as the tubes start lighting up and again (at `off` strength, 0 = not at all) as they
-  // start going out; invisible otherwise. `speed`: the band's pace (1 = the tubes' pace, lower = slower);
+  // start going out; invisible otherwise. `speed`: the band's pace (1 = with the tubes, lower = trailing them);
   // `strength`: how bright the lit lines are (1 = the tubes' yellow); `band`: how long the band is. null = no grid
-  lines: { cells: 4, width: 0.75, strength: 0.75, speed: 0.6, band: 4, off: 1.0 },
+  lines: { cells: 4, width: 0.75, strength: 0.75, speed: 1, band: 4, off: 1.0 },
   maxPixelRatio: 2,
   // the sweep (as in Maya, in frames of its 288-frame loop at 24 fps): one tube after another from the C's top tip,
-  // each fading up over `ramp` frames, all held, then one after another fading out the same way
-  sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 210, outStep: 1.0, ramp: 16, reverse: false },
+  // each fading up over `ramp` frames, all held, then one after another fading out the same way. `speed`: how fast the
+  // whole sweep plays, tubes and grid together (1 = as in Maya, lower = slower)
+  sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 210, outStep: 1.0, ramp: 16, reverse: false, speed: 0.75 },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
   // section then plays the line and the grid wall, and the finished grid stays on screen for the last `end` before the
   // section scrolls away. `smooth`: seconds it takes to catch up with the scroll
@@ -532,7 +533,7 @@ async function start(box) {
   }
   function draw() {
     const fLoop = still ? 0 : (clock * C.fps) % PL;
-    const fSweep = (clock * C.fps) % S.loop;
+    const fSweep = (clock * C.fps * (S.speed || 1)) % S.loop;
     const span = 1 - CFG.scroll.hold - CFG.scroll.end;
     const u = Math.min(1, Math.max(0, (sNow - CFG.scroll.hold) / span));
     const w = smoothstep(u * span / CFG.scroll.blend);
