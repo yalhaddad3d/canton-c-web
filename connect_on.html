@@ -14,8 +14,8 @@
 <div class="note">Test page for the 3D C. Scroll down: it becomes the line, then the grid wall with its connectors (tubes on). Scroll back up for the C.</div>
 <!--
   The 3D C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
-  This version adds short glowing connectors between the blocks of the grid wall: they light up in a wave, flicker
-  subtly while lit (energy, connectivity), and go out in a wave, on a loop. `tubes.wall` sets whether the tubes light
+  This version adds short glowing connectors between the blocks of the grid wall: they sweep and fade in in a wave, flicker
+  subtly while lit (energy, connectivity), and sweep and fade out in a wave, on a loop. `tubes.wall` sets whether the tubes light
   with them on the wall (and flicker too) or stay off there.
   In Webflow: add a Code Embed where the C goes and paste all of this into it.
 
@@ -76,10 +76,12 @@ const CFG = {
   // the line's) sweep, as on the other pages
   sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 210, outStep: 1.0, ramp: 16, reverse: false },
   // the sweep once the grid wall has formed (it takes over from `sweep` as the grid forms, and hands back as it breaks
-  // up): the connectors (and the tubes, with tubes.wall) light up in a wave, hold, and go out in a wave. `speed`: how
-  // fast it plays (1 = as in Maya, lower = slower); going out at the same pace as lighting up; `mirrorOut`: they go out
-  // as fast as they appear to light up. `loop` is set so the next wave sets off just as the last ones go out
-  wallSweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 200, outStep: 1.8, ramp: 16, reverse: false, speed: 0.4, mirrorOut: true },
+  // up): the connectors (and the tubes, with tubes.wall) light up in a wave, hold, and go out in a wave. Both ways the
+  // wave's front sweeps across each tube and connector and the rest fades: lighting up, the front sweeps them on to
+  // `dim` and they fade up to full over `ramp`; going out, the front sweeps them down to `dim` and they fade away.
+  // `edge`: how soft the sweeping front is (share of a block). `speed`: how fast it plays (1 = as in Maya, lower =
+  // slower); going out at the same pace as lighting up. `loop` is set so the next wave sets off just as the last ones go out
+  wallSweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 200, outStep: 1.8, ramp: 16, reverse: false, speed: 0.4, edge: 0.2, dim: 0.15 },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
   // section then plays the line and the grid wall, and the finished grid stays on screen for the last `end` before the
   // section scrolls away. `smooth`: seconds it takes to catch up with the scroll
@@ -227,11 +229,48 @@ async function start(box) {
 
   // matcap shading, read straight down (orthographic), with a per-square glow (the sweep)
   const ORTHO = "vec3 viewDir = vec3( 0.0, 0.0, 1.0 );";
+  // the wall's sweep, worked out per pixel so its front sweeps across each tube and connector as it fades them in and
+  // out (the same timing as level(W, ...) and flick() in the script)
+  const WL = [
+    "uniform vec4 uWs1, uWs2, uWs3, uWs4;\nuniform vec2 uWs5;",
+    // lighting up: the front sweeps it on to dim, then it fades up; going out: the front sweeps it down to dim, then it fades away
+    "float wl1( float f, float k ) {",
+    "  float a = f - uWs1.x - uWs1.y * k, b = f - uWs1.z - uWs1.w * k;",
+    "  float up = smoothstep( - uWs5.x, 0.0, a ) * mix( uWs2.z, 1.0, smoothstep( 0.0, 1.0, a / uWs2.x ) );",
+    "  float dn = mix( 1.0, uWs2.z * ( 1.0 - smoothstep( 0.0, 1.0, b / uWs2.x ) ), smoothstep( - uWs5.y, 0.0, b ) );",
+    "  return up * dn;",
+    "}",
+    "float wl( float k ) { return max( wl1( uWs2.w, k ), wl1( uWs2.w + uWs2.y, k ) ); }",
+    "float wh( float n ) { return fract( sin( n * 12.9898 + 78.233 ) * 43758.5453 ); }",
+    "float wflick( float seed, float t ) {",
+    "  float n = 0.5 + 0.5 * ( 0.55 * sin( 6.2831853 * ( 0.7 * t + wh( seed ) ) ) + 0.3 * sin( 6.2831853 * ( 1.9 * t + wh( seed + 1.7 ) ) ) + 0.15 * sin( 6.2831853 * ( 5.3 * t + wh( seed + 3.1 ) ) ) );",
+    "  return max( 0.6 * n, pow( max( 0.0, sin( 6.2831853 * ( 0.23 * t + wh( seed + 5.3 ) ) ) ), 40.0 ) );",
+    "}"].join("\n") + "\n";
+  // a tube's (or its block's) light: the C's sweep (c), handing over to the wall's at this point of it (wx: how far along
+  // the row from the square's middle)
+  const GW = [
+    "float gWall( float c, float wx ) {",
+    "  if ( uWs4.w >= 0.0 ) return uWs4.w;",
+    "  if ( uWs3.x <= 0.0 ) return c;",
+    "  float g = 0.0;",
+    "  if ( uWs3.y > 0.5 ) {",
+    "    float k = ( uWs4.y > 0.5 ? uWs4.x - 1.0 - vKi : vKi ) + wx * uWs4.z;",
+    "    g = wl( k );",
+    "    g *= 1.0 - uWs3.z * smoothstep( 0.85, 1.0, g ) * wflick( vKi * 3.7 + 11.0, uWs3.w );",
+    "  }",
+    "  return c + ( g - c ) * uWs3.x;",
+    "}"].join("\n") + "\n";
+  const WS = { uWs1: { value: new THREE.Vector4() }, uWs2: { value: new THREE.Vector4() }, uWs3: { value: new THREE.Vector4() },
+    uWs4: { value: new THREE.Vector4(C.n, 0, 0, -1) }, uWs5: { value: new THREE.Vector2() } };
   const withGlow = (sh, local) => {
-    sh.vertexShader = "attribute float aGlow;\nvarying float vGlow;\n" + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
-      sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\nvGlow = aGlow;" + (local ? "\nvLocal = position; vLocalN = normal;" : ""));
-    sh.fragmentShader = "varying float vGlow;\n" + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
-      sh.fragmentShader.replace("vec3 viewDir = normalize( vViewPosition );", ORTHO);
+    Object.assign(sh.uniforms, WS);
+    sh.vertexShader = "attribute float aGlow;\nvarying float vGlowA, vWx, vKi;\n" + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
+      sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\nvGlowA = aGlow;\n" +
+        "vWx = ( instanceMatrix * vec4( position, 1.0 ) ).x - instanceMatrix[3].x; vKi = float( gl_InstanceID );" + (local ? "\nvLocal = position; vLocalN = normal;" : ""));
+    // the block's light on its face follows its tube as a whole (its middle); the tube's own light sweeps across it
+    sh.fragmentShader = "varying float vGlowA, vWx, vKi;\nfloat vGlow;\n" + WL + GW + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
+      sh.fragmentShader.replace("vec3 viewDir = normalize( vViewPosition );", ORTHO)
+        .replace("void main() {", "void main() {\n\tvGlow = gWall( vGlowA, " + (local ? "0.0" : "vWx") + " );");
   };
   const blockMat = new THREE.MeshMatcapMaterial({ matcap: blockTex });
   blockMat.onBeforeCompile = (sh) => {
@@ -242,7 +281,7 @@ async function start(box) {
       uSpill: { value: new THREE.Color().fromArray(CFG.spill.color).multiplyScalar(CFG.spill.amount) }, uReach: { value: CFG.spill.reach * half } });
     withGlow(sh, true);
     sh.vertexShader = "varying float vInst;\nattribute vec4 aOccA, aOccB, aOccC, aOccD;\nvarying vec3 vOccL;\n" +
-      sh.vertexShader.replace("vGlow = aGlow;", "vGlow = aGlow;\nvInst = float( gl_InstanceID );\n" +
+      sh.vertexShader.replace("vGlowA = aGlow;", "vGlowA = aGlow;\nvInst = float( gl_InstanceID );\n" +
         "vOccL = ( mat4( aOccA, aOccB, aOccC, aOccD ) * ( instanceMatrix * vec4( position, 1.0 ) ) ).xyz;");
     sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill, uGrain, uShadow;\nuniform float uHalf, uReach, uThick;\nuniform vec2 uRound;\nvarying float vInst;\nvarying vec3 vOccL;\n" +
       "float rsq( vec2 p, float a, float r ) { vec2 q = abs( p ) - vec2( a - r ); return length( max( q, 0.0 ) ) + min( max( q.x, q.y ), 0.0 ) - r; }\n" +
@@ -499,6 +538,16 @@ async function start(box) {
         if (gridErr(X, Z).err > 0.03) break;
         form = f;
       }
+      const dx = [];
+      for (let i = 0; i + 1 < C.n; i++) {
+        const a = W.reverse ? i + 1 : i, b = W.reverse ? i : i + 1;
+        if (rows[a] === rows[b] && Math.abs(Math.abs(P[b][0] - P[a][0]) - pitch) < 0.2 * pitch) dx.push(Math.sign(P[b][0] - P[a][0]));
+      }
+      const dir = dx.reduce((s, v) => s + v, 0) >= 0 ? 1 : -1;
+      WS.uWs1.value.set(W.inStart, W.inStep, W.outStart, W.outStep);
+      WS.uWs2.value.set(W.ramp, W.loop, W.dim !== undefined ? W.dim : 0.15, 0);
+      WS.uWs5.value.set(Math.max((W.edge || 0.2) * W.inStep, 0.01), Math.max((W.edge || 0.2) * W.outStep, 0.01));
+      WS.uWs4.value.set(C.n, W.reverse ? 1 : 0, dir / pitch, -1);
       const gap = Math.max(pitch - 2 * half, 0.05 * pitch);
       const K = CFG.connect;
       let quad = null, mat = null, cells = null;
@@ -510,16 +559,18 @@ async function start(box) {
           uniforms: { uView: { value: new THREE.Vector4() }, uGrid: { value: new THREE.Vector4(0, z0, pitch, NR) },
             uCon: { value: new THREE.Vector4(0.5 * K.length * gap / pitch, 1, 1, K.halo) }, uCon2: { value: new THREE.Vector4() },
             uPx: { value: 1 }, uNC: { value: NC }, uCells: { value: cells }, uTube: { value: tubeTex },
-            uLv: { value: new THREE.Vector3(CFG.look.levels, Math.max(CFG.glow, 1e-3), CFG.brightness) } },
+            uLv: { value: new THREE.Vector3(CFG.look.levels, Math.max(CFG.glow, 1e-3), CFG.brightness) }, ...WS },
           vertexShader: "varying vec2 vNdc;\nvoid main() { vNdc = position.xy; gl_Position = vec4( position.xy, 0.0, 1.0 ); }",
           fragmentShader: [
-            "uniform vec4 uView, uGrid, uCon, uCon2;\nuniform vec3 uLv;\nuniform float uPx, uNC;\nuniform sampler2D uCells, uTube;\nvarying vec2 vNdc;",
+            "uniform vec4 uView, uGrid, uCon, uCon2;\nuniform vec3 uLv;\nuniform float uPx, uNC;\nuniform sampler2D uCells, uTube;\nvarying vec2 vNdc;\n" + WL,
             "vec3 lit( float g ) {",
             "  float lv = clamp( g * uLv.y, 0.0, 1.0 ) * ( uLv.x - 1.0 ), l0 = min( floor( lv ), uLv.x - 2.0 );",
             "  vec3 c = mix( texture2D( uTube, vec2( ( l0 + 0.5 ) / uLv.x, 0.5 ) ).rgb, texture2D( uTube, vec2( ( l0 + 1.5 ) / uLv.x, 0.5 ) ).rgb, lv - l0 );",
             "  return c * mix( 1.0, uLv.z, clamp( g, 0.0, 1.0 ) );",
             "}",
-            "float cell( float c, float r ) { return texture2D( uCells, vec2( ( mod( c, uNC ) + 0.5 ) / uNC, ( r + 0.5 ) / uGrid.w ) ).r; }",
+            // the order (in the wave) of the block in a cell
+            "float ord( float c, float r ) { return floor( texture2D( uCells, vec2( ( mod( c, uNC ) + 0.5 ) / uNC, ( r + 0.5 ) / uGrid.w ) ).r * 255.0 + 0.5 ); }",
+            "float clv( float k ) { return uWs4.w >= 0.0 ? uWs4.w : wl( k ); }",
             "float h1( float n ) { return fract( sin( n * 12.9898 + 78.233 ) * 43758.5453 ); }",
             // the same flicker as the tubes' (see flick() in the script)
             "float flick( float seed, float t ) {",
@@ -533,7 +584,8 @@ async function start(box) {
             // across a gap in a row: between columns c and c + 1
             "  float r = clamp( floor( gz + 0.5 ), 0.0, uGrid.w - 1.0 ), c = floor( gx );",
             "  float dH = length( vec2( max( abs( gx - c - 0.5 ) - h, 0.0 ), gz - r ) ) * k;",
-            "  float gH = min( cell( c, r ), cell( c + 1.0, r ) );",
+            // its light sweeps across it in the wave's direction, between its two blocks' turns
+            "  float gH = clv( ord( c, r ) + ( gx - c ) * sign( uWs4.z ) );",
             "  gH *= 1.0 - uCon2.z * smoothstep( 0.85, 1.0, gH ) * flick( mod( c, uNC ) * 7.0 + r * 131.0, uCon2.w );",
             "  float aH = cover( dH ) * gH;",
             // across a gap between rows: between rows q and q + 1 in column c2
@@ -541,7 +593,8 @@ async function start(box) {
             "  if ( uGrid.w > 1.5 ) {",
             "    float c2 = floor( gx + 0.5 ), q = clamp( floor( gz ), 0.0, uGrid.w - 2.0 );",
             "    float dV = length( vec2( gx - c2, max( abs( gz - q - 0.5 ) - h, 0.0 ) ) ) * k;",
-            "    gV = min( cell( c2, q ), cell( c2, q + 1.0 ) );",
+            // down to the next row as the wave reaches the block below
+            "    gV = clv( ord( c2, q + 1.0 ) - 1.0 + clamp( gz - q, 0.0, 1.0 ) );",
             "    gV *= 1.0 - uCon2.z * smoothstep( 0.85, 1.0, gV ) * flick( mod( c2, uNC ) * 7.0 + q * 131.0 + 977.0, uCon2.w );",
             "    aV = cover( dV ) * gV;",
             "  }",
@@ -570,8 +623,7 @@ async function start(box) {
           d.fill(0);
           for (let i = 0; i < C.n; i++) {
             const col = Math.round((X[i] - g.x0) / pitch), row = Math.min(NR - 1, Math.max(0, Math.round((Z[i] - z0) / pitch)));
-            const lv = forceGlow !== null ? forceGlow : level(W, i, f);
-            d[(row * NC + ((col % NC) + NC) % NC) * 4] = Math.round(Math.min(1, Math.max(0, lv)) * 255);
+            d[(row * NC + ((col % NC) + NC) % NC) * 4] = W.reverse ? C.n - 1 - i : i;
           }
           cells.needsUpdate = true;
           renderer.getDrawingBufferSize(buf);
@@ -579,7 +631,7 @@ async function start(box) {
           u.uView.value.set(camera.position.x, camera.position.z, camera.right, camera.top);
           u.uGrid.value.x = g.x0;
           u.uCon.value.y = K.width * dpr; u.uCon.value.z = K.haloWidth * dpr;
-          u.uCon2.value.set(on, K.strength, K.flicker, t * K.flickerSpeed);
+          u.uCon2.value.set(on, K.strength, K.flicker, t * K.flickerSpeed);   // (the wave's timing comes from WS)
           u.uPx.value = 2 * camera.top / buf.y;
           return on;
         },
@@ -626,14 +678,11 @@ async function start(box) {
     if (handSnap) hand = handTo;
     handSnap = false;
     const T = CFG.tubes || { wall: true, flicker: 0 };
-    for (let i = 0; i < C.n; i++) {
-      if (forceGlow !== null || still) { glow.array[i] = forceGlow !== null ? forceGlow : 0; continue; }
-      const c = level(S, i, fSweep);
-      let wv = 0;
-      if (T.wall && hand > 0) { wv = level(W, i, fWall); wv *= 1 - (T.flicker || 0) * smoothstep((wv - 0.85) / 0.15) * flick(i * 3.7 + 11, clock * ((CFG.connect && CFG.connect.flickerSpeed) || 1)); }
-      glow.array[i] = c + (wv - c) * hand;
-    }
+    for (let i = 0; i < C.n; i++) glow.array[i] = forceGlow !== null ? forceGlow : still ? 0 : level(S, i, fSweep);
     glow.needsUpdate = true;
+    WS.uWs2.value.w = fWall;
+    WS.uWs3.value.set(hand, T.wall ? 1 : 0, T.flicker || 0, clock * ((CFG.connect && CFG.connect.flickerSpeed) || 1));
+    WS.uWs4.value.w = forceGlow !== null ? forceGlow : still ? 0 : -1;
     renderer.render(scene, camera);
     if (!shown) {
       shown = true;
