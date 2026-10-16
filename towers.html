@@ -16,10 +16,10 @@
   Two towers of the C's blocks for Webflow, drawn with three.js from c_web.bin (it only borrows the block + tube piece
   and the Arnold look; the motion is made here). In Webflow: add a Code Embed where it goes and paste all of this in.
 
-  What it does: two twisting towers of blocks run like conveyors, one stepping down while the other steps up. Each step,
-  at the crossing height, the two towers exchange a block: one passes over, the other under, and as each lands in the
-  other tower its tube lights up; the lit blocks carry on with their new tower, fading as they go. It loops forever,
-  seamlessly (there is no first or last step). It doesn't react to scrolling.
+  What it does: two twisting towers of blocks glide continuously, the left one down and the right one up. Once a cycle,
+  at the exchange height, they swap a pair of blocks (one swinging round the front, the other round the back), and as
+  the exchange lands both towers light up in a sweep from the exchange outwards and then go out the same way, like the
+  C. It loops forever, seamlessly. It doesn't react to scrolling.
 
   Light on purpose: nothing loads until it's about to scroll into view; three.js comes from a CDN only then; all the
   blocks are drawn in 2 draw calls; it only draws while on screen; the pixel ratio is capped at 2. Visitors who ask for
@@ -53,18 +53,22 @@ const CFG = {
   // the camera: orthographic, looking down at the towers from `elevation` degrees above, turned `azimuth` degrees round
   // them; `height`: how many blocks tall the view is; `shiftX`: moves the towers sideways on screen (share of the width,
   // + = right), e.g. to leave room for text
-  camera: { elevation: 24, azimuth: 32, height: 9, shiftX: 0 },
-  // the towers: `gap` between them where they come closest (at the exchange height; share of a block); `bend`: how far
-  // each curves away from the other above and below that (share of a block), over about `bendLength` blocks; `lean`:
-  // tilts both towers (+ = their tops lean right); `spacing` between blocks in a tower (multiple of a block's thickness);
-  // `twist`: degrees each block turns from the one below (the two towers twist opposite ways); `out`: how far the
-  // exchanging blocks pull out of their towers, one forwards and one back, to pass each other (share of a block; ~1.1
-  // keeps them clear of the towers); `flip`: turns the blocks over (if the tube sits on the wrong face)
-  towers: { gap: 0.3, bend: 0.9, bendLength: 5, lean: 0, spacing: 1.35, twist: 4, out: 1.1, flip: false },
-  // the motion: the towers glide continuously, one down and one up, a block every `step` seconds; every block that reaches
-  // the exchange height swaps towers on the way, taking `exchange` of a step (pulling out, crossing over, sliding in while
-  // its new tower carries on moving); it lights up over `lightOn` seconds as it lands, stays lit `lit`, fades over `fade`
-  motion: { step: 2.4, exchange: 0.85, lightOn: 0.5, lit: 3.0, fade: 4.0 },
+  camera: { elevation: 24, azimuth: 32, height: 12, shiftX: 0.12, shiftY: 0.12 },
+  // the towers (like the reference): side by side and nearly straight above the exchange, `gap` apart there (share of a
+  // block), spreading a touch (`splay`) towards the top; below it the left tower curves across (`cross`) and back behind
+  // (`depth`) the right one, which drifts a little left (`drift`); all in shares of a block, over about `bendLength`
+  // blocks. `spacing` between blocks in a tower (multiple of a block's thickness); `twist`: degrees each block turns from
+  // the one below (the two towers twist opposite ways); `out`: how far the exchanging blocks swing out of the towers to
+  // pass each other (share of a block); `swing`: how much they turn as they go (degrees); `flip`: turns the blocks over
+  towers: { gap: 0.6, splay: 0.2, cross: 0.5, depth: 0.6, drift: 0.25, bendLength: 4, spacing: 1.35, twist: 4, out: 1.1, swing: 18, flip: false },
+  // the motion: the towers glide continuously (left down, right up), `blocks` blocks every `cycle` seconds; once a cycle
+  // the blocks reaching the exchange height swap towers on the way, over `exchange` seconds (one swings round the front,
+  // the other round the back, while both towers carry on)
+  motion: { cycle: 12, blocks: 2, exchange: 2.2 },
+  // as each exchange lands, both towers light up in a sweep from the exchange outwards and go out the same way, like the
+  // C (in frames at 24 fps after it lands, by distance from the exchange in blocks): lighting `inStep` frames per block,
+  // each fading up over `ramp`; going out from `outStart`, `outStep` frames per block
+  sweep: { inStep: 5, outStart: 150, outStep: 3, ramp: 16 },
 };
 
 document.querySelectorAll(".c3d[data-src]").forEach((box) => {
@@ -295,7 +299,7 @@ async function start(box) {
   });
 
   // ---- the towers
-  const T = CFG.towers, MO = CFG.motion;
+  const T = CFG.towers;
   // the piece's own frame turned upright: its thickness axis up (+y), an edge along x
   const R0 = new THREE.Quaternion().setFromRotationMatrix(T.flip
     ? new THREE.Matrix4().makeBasis(uAx, nAx.clone().negate(), vAx).invert()
@@ -305,9 +309,11 @@ async function start(box) {
   for (const p of C.parts) for (let k = 0; k < p.pos.length; k += 3) tk = Math.max(tk, Math.abs(p.pos[k] * nAx.x + p.pos[k + 1] * nAx.y + p.pos[k + 2] * nAx.z));
   const size = 2 * half, P = Math.max(T.spacing, 1.05) * 2 * tk;      // block size, and the height from one block to the next
   const X0 = size / 2 + T.gap * size / 2;                           // each tower's centre at the exchange height
-  // a tower's centre at height y: closest at the exchange height, curving away above and below (A to the left, B right)
-  const bendL = Math.max(T.bendLength, 0.5) * P;
-  const xOf = (y, side) => side * (X0 + T.bend * size * (1 - 1 / (1 + (y / bendL) * (y / bendL)))) + (T.lean || 0) * y;
+  // a tower's centre at height y (side -1: left, +1: right)
+  const bendL = Math.max(T.bendLength, 0.5) * P, sq = (q) => q * q / (1 + q * q);
+  const xOf = (y, side) => y >= 0 ? side * (X0 + T.splay * size * sq(y / bendL))
+    : side < 0 ? -X0 + T.cross * size * sq(-y / bendL) : X0 - T.drift * size * sq(-y / bendL);
+  const zOf = (y, side) => y < 0 && side < 0 ? -T.depth * size * sq(-y / bendL) : 0;
   const UP = new THREE.Vector3(0, 1, 0), qY = new THREE.Quaternion(), pos = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1), M = new THREE.Matrix4();
   const ease = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * x * (x * (6 * x - 15) + 10); };
 
@@ -317,23 +323,34 @@ async function start(box) {
   camera.position.set(D * Math.cos(el) * Math.sin(az), D * Math.sin(el), D * Math.cos(el) * Math.cos(az));
   camera.lookAt(0, 0, 0);
   let aspect = 1, J = 8;
+  camera.updateMatrixWorld();
+  const cR = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0), cU = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
   function frameCamera() {
-    // `height` blocks tall, but never so tight that the towers (and a block pulled out of them) don't fit across
-    const yv = CFG.camera.height * P / 2 / Math.cos(el);
-    const across = (X0 + T.bend * size * (1 - 1 / (1 + (yv / bendL) * (yv / bendL))) + Math.abs(T.lean || 0) * yv + size / 2) * Math.cos(az) +
-      (size / 2 + T.out * size) * Math.sin(az) + size * 0.15;
-    const hh = Math.max(CFG.camera.height * P / 2, across / aspect), hw = hh * aspect, sx = (CFG.camera.shiftX || 0) * 2 * hw;
-    Object.assign(camera, { top: hh, bottom: -hh, left: -hw - sx, right: hw - sx });
+    // how wide the towers are on screen over the height in view (their centres, plus a block's reach either side)
+    let hh = CFG.camera.height * P / 2;
+    const yv = hh / Math.cos(el) + P, v = new THREE.Vector3();
+    let x0 = 1e9, x1 = -1e9;
+    for (let y = -yv; y <= yv; y += P / 2) for (const sd of [-1, 1]) {
+      const sx = v.set(xOf(y, sd), y, zOf(y, sd)).dot(cR);
+      x0 = Math.min(x0, sx - 0.8 * size); x1 = Math.max(x1, sx + 0.8 * size);
+    }
+    x0 = Math.min(x0, -(X0 + 0.8 * size) * Math.cos(az) - T.out * size * Math.sin(az));
+    x1 = Math.max(x1, (X0 + 0.8 * size) * Math.cos(az) + T.out * size * Math.sin(az));
+    hh = Math.max(hh, (x1 - x0) / 2 / Math.max(aspect, 1e-3) / (1 - 2 * Math.abs(CFG.camera.shiftX || 0)));
+    const hw = hh * aspect, cx = (x0 + x1) / 2 - (CFG.camera.shiftX || 0) * 2 * hw, cy = -(CFG.camera.shiftY || 0) * 2 * hh;
+    Object.assign(camera, { top: cy + hh, bottom: cy - hh, left: cx - hw, right: cx + hw });
     camera.updateProjectionMatrix();
     // enough blocks above and below to fill the view (the ones that wrap round are out of sight)
-    J = Math.min(Math.floor((NI / 2 - 1) / 2), Math.ceil((hh / Math.cos(el) + size) / P) + 2);
+    J = Math.min(Math.floor((NI / 2 - 1) / 2), Math.ceil((hh * (1 + 2 * Math.abs(CFG.camera.shiftY || 0)) / Math.cos(el) + size) / P) + 2);
   }
 
-  // where everything is at time t (seconds): both towers glide one block every step; a block's light from how long
-  // ago it landed in its new tower
-  const S = MO.step, E = Math.min(Math.max(MO.exchange, 0.2), 0.95);
-  function lightAt(tau) {     // tau: seconds since it landed (negative: still to come)
-    return smoothstep((tau + MO.lightOn) / MO.lightOn) * (1 - smoothstep((tau - MO.lit) / MO.fade));
+  // the timing: a step is one block of travel; the exchange happens in the first step of each cycle
+  const MO2 = CFG.motion, BL = Math.max(1, Math.round(MO2.blocks)), S = MO2.cycle / BL, E = Math.min(MO2.exchange / S, 0.95);
+  const SW = CFG.sweep;
+  // a block's light, at d blocks from the exchange, sec seconds after the last exchange landed
+  function lightAt(d, sec) {
+    const f = sec * 24, a = SW.inStep * d, b = SW.outStart + SW.outStep * d;
+    return smoothstep((f - a) / SW.ramp) * (1 - smoothstep((f - b) / SW.ramp));
   }
   const inst = [], above = new Int16Array(NI), INV = new THREE.Matrix4(), FAR = new THREE.Matrix4().makeTranslation(1e4, 1e4, 1e4);
   for (let i = 0; i < NI; i++) inst.push(new THREE.Matrix4());
@@ -345,32 +362,38 @@ async function start(box) {
     glow.array[i] = forceGlow !== null ? forceGlow : g;
   }
   const tw = THREE.MathUtils.degToRad(T.twist);
-  // one block's way from one tower to the other while both keep moving: u (0..1) through its exchange, its old slot's
-  // height yFrom and its new slot's yTo (both moving); it pulls out (staying with its old slot), crosses over (from the
-  // old slot's height to the new one's), and slides in (with its new slot)
+  // one block's way from one tower to the other while both keep moving: u (0..1) through its exchange; it follows its
+  // old slot (yFrom, moving) and eases over to its new one (yTo, moving the other way), swinging out (zs: in front or
+  // behind) and turning a little as it goes, all in one smooth curve
+  const sw = THREE.MathUtils.degToRad(T.swing || 0);
   function hop(i, u, yFrom, sFrom, yTo, sTo, zs, g) {
-    const a = 0.3, pull = ease(u / a), push = ease((u - (1 - a)) / a), k = ease((u - a) / (1 - 2 * a));
+    const k = ease(u), bell = Math.pow(Math.sin(Math.PI * u), 2);
     const y = yFrom + (yTo - yFrom) * k;
     const x = xOf(yFrom, sFrom) + (xOf(yTo, sTo) - xOf(yFrom, sFrom)) * k;
-    const yaw = (sFrom * -tw * yFrom / P) * (1 - k) + (sTo * -tw * yTo / P) * k;
-    put(i, x, y, yaw, g, zs * T.out * size * pull * (1 - push));
+    const z = zOf(yFrom, sFrom) + (zOf(yTo, sTo) - zOf(yFrom, sFrom)) * k + zs * T.out * size * bell;
+    const yaw = (sFrom * -tw * yFrom / P) * (1 - k) + (sTo * -tw * yTo / P) * k + zs * sw * Math.sin(Math.PI * u);
+    put(i, x, y, yaw, g, z);
   }
   function layout(t) {
-    const o = t / S, fo = Math.floor(o), fr = o - fo;                // blocks moved so far (A down, B up)
+    const o = t / S, fo = Math.floor(o), fr = o - fo;                // blocks travelled so far (left down, right up)
+    const exch = ((fo % BL) + BL) % BL === 0 && fr < E;               // this step's exchange, while it lasts
+    const sec = ((((o - E) % BL) + BL) % BL) * S;                     // seconds since the last exchange landed
     const NJ = 2 * J + 1, md = (k) => ((k % NJ) + NJ) % NJ;
     count = 2 * NJ;
     for (let j = -J; j <= J; j++) {
       const iA = md(j + fo), iB = NJ + md(j - fo);
+      // the block resting above each one: always the next slot up in its own tower (so its shading never jumps)
+      above[iA] = j < J ? md(j + 1 + fo) : -1;
+      above[iB] = j < J ? NJ + md(j + 1 - fo) : -1;
       const yA = (j - fr) * P, yB = (j + fr) * P;
-      const tauA = (fr - j - E) * S, tauB = (fr + j - E) * S;        // seconds since the block in this slot landed
-      if (j === 0 && fr < E) {
-        // the slots at the exchange height: each takes in the block from the other tower
+      const gA = lightAt(Math.abs(yA) / P, sec), gB = lightAt(Math.abs(yB) / P, sec);
+      if (j === 0 && exch) {
         const u = fr / E;
-        hop(iA, u, yB, 1, yA, -1, -1, lightAt(tauA));                 // B's block, round the back, into A
-        hop(iB, u, yA, -1, yB, 1, 1, lightAt(tauB));                  // A's block, round the front, into B
+        hop(iA, u, yB, 1, yA, -1, -1, gA);                            // the right tower's block, round the back, into the left
+        hop(iB, u, yA, -1, yB, 1, 1, gB);                             // the left tower's block, round the front, into the right
       } else {
-        put(iA, xOf(yA, -1), yA, tw * yA / P, lightAt(tauA));
-        put(iB, xOf(yB, 1), yB, -tw * yB / P, lightAt(tauB));
+        put(iA, xOf(yA, -1), yA, tw * yA / P, gA, zOf(yA, -1));
+        put(iB, xOf(yB, 1), yB, -tw * yB / P, gB, zOf(yB, 1));
       }
     }
   }
@@ -379,17 +402,11 @@ async function start(box) {
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
   let clock = still ? 0 : 0, last = 0, running = false, shown = false;
   function draw() {
-    layout(still ? MO.step * (MO.exchange + 0.05) : clock);
+    layout(still ? S * (E + 0.4) : clock);
     for (let i = 0; i < count; i++) for (const mm of meshes) mm.setMatrixAt(i, inst[i]);
-    // the block above each block (the nearest one higher up that it sits under), for the shading
+    // the block above each block (the next one up in its tower), for the shading
     for (let i = 0; i < count; i++) {
-      const xi = inst[i].elements[12], yi = inst[i].elements[13];
-      let best = -1, by = 1e9;
-      for (let k = 0; k < count; k++) {
-        const yk = inst[k].elements[13];
-        if (yk <= yi + 1e-4 || yk >= by || Math.abs(inst[k].elements[12] - xi) > 0.9 * size) continue;
-        best = k; by = yk;
-      }
+      const best = above[i];
       const el2 = best < 0 ? FAR.elements : INV.copy(inst[best]).invert().elements;
       for (let k = 0; k < 4; k++) occ[k].array.set(el2.slice(k * 4, k * 4 + 4), i * 4);
     }
