@@ -519,7 +519,22 @@ async function start(box) {
       LN.uLnB.value.set(L.length * on, Math.max(L.edge * on, 0.01), L.length * off, Math.max(L.edge * off, 0.01));
       LN.uLnX.value.set(tub ? ((inner + outer) / 2 - inner) / (2 * inner) * L.cells : 0, L.strength, L.dim);
       LN.uWv3.value.set(C.n, W.reverse ? 1 : 0, -1, W.loop);
+      // the scroll frame from which the grid stays formed (the tubes' sweep hands over to the wall's from there)
+      let form = PS;
+      for (let f = PS; f >= 0; f--) {
+        let s = 0, c = 0, err = 0;
+        const X = [], Z = [];
+        for (let i = 0; i < C.n; i++) { at(C.scroll, i, f, pA, qA); X.push(pA.x); Z.push(pA.z); const a = 2 * Math.PI * pA.x / pitch; s += Math.sin(a); c += Math.cos(a); }
+        const x0 = Math.atan2(s, c) / (2 * Math.PI) * pitch;
+        for (let i = 0; i < C.n; i++) {
+          const row = Math.min(NR - 1, Math.max(0, Math.round((Z[i] - z0) / pitch)));
+          err += Math.hypot(X[i] - x0 - Math.round((X[i] - x0) / pitch) * pitch, Z[i] - z0 - row * pitch);
+        }
+        if (err / (C.n * pitch) > 0.03) break;
+        form = f;
+      }
       lines = {
+        form,
         update(w, f) {
           // how close every square is to its place in the grid: the grid only shows once they're all there
           let s = 0, c = 0, err = 0;
@@ -544,7 +559,7 @@ async function start(box) {
   const inst = Array.from({ length: C.n }, () => new THREE.Matrix4()), INV = new THREE.Matrix4();
   const FAR = new THREE.Matrix4().makeTranslation(1e4, 1e4, 1e4);   // "nothing above": far away
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let clock = 0, last = 0, running = false, shown = false, sNow = progress(), forceGlow = null;
+  let clock = 0, last = 0, running = false, shown = false, sNow = progress(), forceGlow = null, hand = 0, handTo = 0, handSnap = true;
   function progress() {
     const r = track.getBoundingClientRect(), span = r.height - innerHeight;
     return span > 0 ? Math.min(1, Math.max(0, -r.top / span)) : 0;
@@ -562,7 +577,13 @@ async function start(box) {
       inst[i].copy(M);
     }
     // the C's sweep, handing over to the wall's as the grid forms
-    const hand = lines ? lines.update(w, fWall) : 0;
+    if (lines) lines.update(w, fWall);
+    // the wall's sweep takes over once the grid has formed, and only hands back once you've scrolled well back into
+    // the line (so scrolling a little never flips it); the handover itself eases in over a moment (handEase)
+    if (!lines || w < 0.5 || fScroll < lines.form - 0.15 * PS) handTo = 0;
+    else if (fScroll >= lines.form) handTo = 1;
+    if (handSnap) hand = handTo;
+    handSnap = false;
     for (let i = 0; i < C.n; i++) glow.array[i] = forceGlow !== null ? forceGlow : still ? 0 :
       level(S, i, fSweep) + (level(W, i, fWall) - level(S, i, fSweep)) * hand;
     for (let i = 0; i < C.n; i++) {                // the square above each square (the neighbour sitting higher)
@@ -585,13 +606,14 @@ async function start(box) {
   }
   // for checking it in the console: set(scroll 0..1, seconds) shows that moment; pause() stops the clock;
   // lightAll(0..1) lights every tube that much (lightAll(null) goes back to the sweep)
-  box.__c3d = { C, meshes, glow, draw, camera, set: (s, t) => { sNow = s; if (t !== undefined) clock = t; draw(); },
+  box.__c3d = { C, meshes, glow, draw, camera, set: (s, t) => { sNow = s; if (t !== undefined) clock = t; handSnap = true; draw(); },
     pause: () => { running = true; renderer.setAnimationLoop(null); }, lightAll: (g) => { forceGlow = g; draw(); } };
 
   function loop(now) {
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;   // no jump after a pause
     last = now;
     if (!still) clock += dt;
+    hand += (handTo - hand) * (1 - Math.exp(-dt / 0.6));
     const d = progress() - sNow;
     sNow += CFG.scroll.smooth > 0 ? d * (1 - Math.exp(-dt / CFG.scroll.smooth)) : d;
     if (still && Math.abs(d) < 1e-4) return;
