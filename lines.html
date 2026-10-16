@@ -65,11 +65,12 @@ const CFG = {
   // `width` CSS pixels thin, reaching in under the tube. It's lit by a band of light that travels through the wall in
   // the tubes' order, setting off as the tubes start lighting up and again (at `off` strength, 0 = not at all) as they
   // start going out; invisible otherwise. `speed`: the band's pace (1 = with the tubes, lower = trailing them);
-  // `strength`: how bright the lit lines are (1 = the tubes' yellow). The band, in blocks: the lines sweep in at its
-  // front, fade up to full over `rise` blocks, fade back down over the rest of its `length`, and sweep out at its end;
-  // `dim`: how bright they are as they sweep in and out (1 = no fade); `edge`: how sharp both sweep edges are (share of
-  // a block; smaller = sharper). null = no grid
-  lines: { cells: 4, width: 0.75, strength: 0.75, speed: 1, length: 4, rise: 1, dim: 0.3, edge: 0.2, off: 1.0 },
+  // `strength`: how bright the lit lines are (1 = the tubes' yellow). Each block, as its tube starts lighting: the
+  // lines sweep in across it over `sweep` seconds, fade up to full over `rise` seconds, fade back down until `length`
+  // seconds, then sweep out across it the same way (each block in turn, so the wall shows a wave); when the tubes go out
+  // it runs again, ending as each tube finishes going out. `dim`: how bright they
+  // are as they sweep in and out (1 = no fade); `edge`: how soft the sweep edges are (share of a block). null = no grid
+  lines: { cells: 4, width: 0.75, strength: 0.75, speed: 1, sweep: 1.0, rise: 0.6, length: 2.2, dim: 0.3, edge: 0.35, off: 1.0 },
   maxPixelRatio: 2,
   // the sweep (as in Maya, in frames of its 288-frame loop at 24 fps): one tube after another from the C's top tip,
   // each fading up over `ramp` frames, all held, then one after another fading out the same way. `speed`: how fast the
@@ -247,8 +248,8 @@ async function start(box) {
         "vOccL = ( mat4( aOccA, aOccB, aOccC, aOccD ) * ( instanceMatrix * vec4( position, 1.0 ) ) ).xyz;");
     sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill, uGrain, uShadow;\nuniform float uHalf, uReach, uThick;\nuniform vec2 uRound;\nvarying float vInst, vWx;\nvarying vec3 vOccL;\n" +
       "uniform vec4 uLn, uWv, uWv2, uWv3, uLnB;\nuniform vec3 uLnL;\nuniform vec3 uLnX;\nuniform sampler2D uLnTube;\n" +
-      "float band( float f, float t, float h, float e ) { float d = f - t; d -= uWv3.w * floor( d / uWv3.w + 0.5 );\n" +
-      "  float p = uWv2.y * h, lv = d < p ? mix( uLnX.z, 1.0, smoothstep( 0.0, p, d ) ) : mix( 1.0, uLnX.z, smoothstep( p, h, d ) );\n" +
+      "float band( float f, float t ) { float d = f - t, h = uLnB.x, e = uLnB.y, p = uLnB.w; d -= uWv3.w * floor( d / uWv3.w + 0.5 );\n" +
+      "  float lv = d < p ? mix( uLnX.z, 1.0, smoothstep( 0.0, p, d ) ) : mix( 1.0, uLnX.z, smoothstep( p, h, d ) );\n" +
       "  return smoothstep( - e, 0.0, d ) * ( 1.0 - smoothstep( h, h + e, d ) ) * lv; }\n" +
       "float gline( float c, float fw, float other, float ext ) { float k = floor( c + 0.5 ); if ( k < 1.0 || k > uLn.z - 1.0 || other < - ext || other > uLn.z + ext ) return 0.0;\n" +
       "  return clamp( 0.5 * uLn.x + 0.5 - abs( c - k ) / max( fw, 1e-5 ), 0.0, 1.0 ); }\n" +
@@ -274,8 +275,8 @@ async function start(box) {
       "  vec2 c = ( vec2( dot( vLocal, uU ), dot( vLocal, uV ) ) / uLn.y + 1.0 ) * 0.5 * uLn.z, fw = fwidth( c );\n" +
       "  float ext = uLnX.x * smoothstep( 0.0, 0.5, vGlow );\n" +
       "  float ln = max( gline( c.x, fw.x, c.y, ext ), gline( c.y, fw.y, c.x, ext ) ) * step( 0.9, face );\n" +
-      "  float k = ( uWv3.y > 0.5 ? uWv3.x - 1.0 - vInst : vInst ) + vWx * uWv2.z;\n" +
-      "  float g = uWv3.z >= 0.0 ? uWv3.z : max( band( uWv.x, uWv.y + uWv.z * k, uLnB.x, uLnB.y ), uWv2.w * band( uWv.x, uWv.w + uWv2.x * k, uLnB.z, uLnB.w ) );\n" +
+      "  float k = uWv3.y > 0.5 ? uWv3.x - 1.0 - vInst : vInst, xs = uLnB.z * clamp( vWx * uWv2.z + 0.5, 0.0, 1.0 );\n" +
+      "  float g = uWv3.z >= 0.0 ? uWv3.z : max( band( uWv.x, uWv.y + uWv.z * k + xs ), uWv2.w * band( uWv.x, uWv.w + uWv2.x * k + xs ) );\n" +
       "  float a = ln * clamp( g, 0.0, 1.0 ) * uLn.w * uLnX.y;\n" +
       "  if ( a > 0.001 ) {\n" +
       "    float lv = clamp( g * uLnL.y, 0.0, 1.0 ) * ( uLnL.x - 1.0 ), l0 = min( floor( lv ), uLnL.x - 2.0 );\n" +
@@ -504,8 +505,12 @@ async function start(box) {
       const L = CFG.lines;
       const sp = Math.max(L.speed, 0.05);
       LN.uWv.value.set(0, S.inStart, S.inStep / sp, S.outStart);   // the band's front: as each tube starts lighting / going out
-      LN.uWv2.value.set(S.outStep / sp, Math.min(Math.max(L.rise / L.length, 0), 1), dir / pitch, L.off);
-      LN.uLnB.value.set(L.length * S.inStep / sp, Math.max(L.edge * S.inStep / sp, 0.01), L.length * S.outStep / sp, Math.max(L.edge * S.outStep / sp, 0.01));
+      LN.uWv2.value.set(S.outStep / sp, 0, dir / (2 * inner), L.off);
+      // each block's own timing, in frames of the sweep: sweep-out start, edge softness, sweep across, fade up
+      const fr = C.fps * (S.speed || 1), swp = Math.max(L.sweep * fr, 1);
+      LN.uLnB.value.set(Math.max(L.length * fr, 1), Math.max(L.edge * swp, 0.5), swp, Math.min(Math.max(L.rise * fr, 0.5), Math.max(L.length * fr, 1)));
+      // going out: timed so each block's lines finish sweeping out as its tube finishes going out
+      LN.uWv.value.w = S.outStart + S.ramp - Math.max(L.length * fr, 1) - swp;
       LN.uLnX.value.set(tub ? ((inner + outer) / 2 - inner) / (2 * inner) * L.cells : 0, L.strength, L.dim);
       LN.uWv3.value.set(C.n, S.reverse ? 1 : 0, -1, S.loop);
       lines = {
