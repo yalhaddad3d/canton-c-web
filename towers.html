@@ -410,19 +410,43 @@ async function start(box) {
   // old slot (yFrom, moving) and eases over to its new one (yTo, moving the other way), swinging out (zs: in front or
   // behind) and turning a little as it goes, all in one smooth curve
   const sw = THREE.MathUtils.degToRad(T.swing || 0);
-  // It slides straight out of its tower like a drawer (towards the camera from the front tower, away from it from the
-  // back one, square to the gap and not turning), so it never touches the blocks above and below; once clear it travels
-  // across (turning a little as it goes), comes to the other tower's depth while still clear of it, and slides straight
-  // in. Each part flows into the next. (lateral: across the screen; depth: towards the camera)
+  // One continuous movement, no stops: it slides straight out of its tower like a drawer (towards the camera from the
+  // front tower, away from it from the back one, square to the gap), rounds a soft corner, travels across (staying that
+  // far out, clear of both towers), rounds another and slides straight into the other tower; it moves along that path at one smooth pace (easing
+  // in at the start and out at the end only), turning a little on the way. (lateral: across the screen; depth: towards
+  // the camera)
+  const PT = [];
+  for (let k = 0; k < 40; k++) PT.push([0, 0]);
+  function pathAt(s0, pts, n) {                                       // the point at arc length s0 along pts[0..n)
+    let acc = 0;
+    for (let k = 1; k < n; k++) {
+      const dl = Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]);
+      if (acc + dl >= s0 || k === n - 1) { const f = dl > 0 ? Math.min(1, (s0 - acc) / dl) : 0; return [pts[k - 1][0] + (pts[k][0] - pts[k - 1][0]) * f, pts[k - 1][1] + (pts[k][1] - pts[k - 1][1]) * f]; }
+      acc += dl;
+    }
+    return pts[n - 1];
+  }
   function hop(i, u, yFrom, sFrom, yTo, sTo, zs, g) {
-    const o = ease(u / 0.3) * (1 - ease((u - 0.7) / 0.3));            // how far out (0..1)
-    const k1 = ease((u - 0.18) / 0.42), k2 = ease((u - 0.36) / 0.36);  // across, then to the other tower's depth
     const xf = xOf(yFrom, sFrom), zf = zOf(yFrom, sFrom), xt = xOf(yTo, sTo), zt = zOf(yTo, sTo);
     const Lf = xf * Math.cos(az) - zf * Math.sin(az), Df = xf * Math.sin(az) + zf * Math.cos(az);
     const Lt = xt * Math.cos(az) - zt * Math.sin(az), Dt = xt * Math.sin(az) + zt * Math.cos(az);
-    const L = Lf + (Lt - Lf) * k1, D = Df + (Dt - Df) * k2 + zs * T.out * size * o;
-    const y = yFrom + yOf(sFrom) + (yTo + yOf(sTo) - yFrom - yOf(sFrom)) * k1;
-    const yaw = (sFrom * -tw * yFrom / P) * (1 - k1) + (sTo * -tw * yTo / P) * k1 + zs * sw * Math.sin(Math.PI * k1) * o * o;
+    const so = zs * T.out * size, r = 0.45 * size;
+    // the path: out, a rounded corner, across, a rounded corner, in
+    const P1 = [Lf, Df + so], P2 = [Lt, Df + so];                    // across at its own side's distance, then straight in
+    const toward = (a, b, d) => { const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, q = Math.min(d / l, 0.49); return [a[0] + (b[0] - a[0]) * q, a[1] + (b[1] - a[1]) * q]; };
+    const A1 = toward(P1, [Lf, Df], r), B1 = toward(P1, P2, r), A2 = toward(P2, P1, r), B2 = toward(P2, [Lt, Dt], r);
+    let n = 0;
+    PT[n][0] = Lf; PT[n++][1] = Df;
+    const quad = (a, c, b) => { for (let k = 0; k <= 8; k++) { const q = k / 8, m = 1 - q; PT[n][0] = m * m * a[0] + 2 * m * q * c[0] + q * q * b[0]; PT[n++][1] = m * m * a[1] + 2 * m * q * c[1] + q * q * b[1]; } };
+    quad(A1, P1, B1); quad(A2, P2, B2);
+    PT[n][0] = Lt; PT[n++][1] = Dt;
+    let len = 0;
+    for (let k = 1; k < n; k++) len += Math.hypot(PT[k][0] - PT[k - 1][0], PT[k][1] - PT[k - 1][1]);
+    const [L, D] = pathAt(ease(u) * len, PT, n);
+    // height and turn follow how far across it is (so it doesn't drift up or down while sliding in or out)
+    const b = Math.abs(Lt - Lf) > 1e-6 ? Math.min(Math.max((L - Lf) / (Lt - Lf), 0), 1) : ease(u);
+    const y = yFrom + yOf(sFrom) + (yTo + yOf(sTo) - yFrom - yOf(sFrom)) * b;
+    const yaw = (sFrom * -tw * yFrom / P) * (1 - b) + (sTo * -tw * yTo / P) * b + zs * sw * Math.sin(Math.PI * b);
     put(i, L * Math.cos(az) + D * Math.sin(az), y, yaw, g, -L * Math.sin(az) + D * Math.cos(az));
   }
   function layout(t) {
