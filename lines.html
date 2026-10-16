@@ -73,8 +73,9 @@ const CFG = {
   maxPixelRatio: 2,
   // the sweep (as in Maya, in frames of its 288-frame loop at 24 fps): one tube after another from the C's top tip,
   // each fading up over `ramp` frames, all held, then one after another fading out the same way. `speed`: how fast the
-  // whole sweep plays, tubes and grid together (1 = as in Maya, lower = slower)
-  sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 160, outStep: 1.8, ramp: 16, reverse: false, speed: 0.4 },
+  // whole sweep plays, tubes and grid together (1 = as in Maya, lower = slower). `mirrorOut`: the tubes go out as fast
+  // as they appear to light up (false = Maya's plain fade, which reads as lingering)
+  sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 160, outStep: 1.8, ramp: 16, reverse: false, speed: 0.4, mirrorOut: true },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
   // section then plays the line and the grid wall, and the finished grid stays on screen for the last `end` before the
   // section scrolls away. `smooth`: seconds it takes to catch up with the scroll
@@ -364,7 +365,11 @@ async function start(box) {
   function level(i, f) {
     const k = S.reverse ? C.n - 1 - i : i;
     const a = S.inStart + S.inStep * k, b = S.outStart + S.outStep * k;
-    return smoothstep((f - a) / S.ramp) * (1 - smoothstep((f - b) / S.ramp));
+    // going out mirrors how lighting up looks: a tube reads as lit from its first glimmer, so it's made to read as out
+    // just as quickly (instead of looking lit until the very end of its fade)
+    const down = smoothstep((f - b) / S.ramp);
+    const out = S.mirrorOut ? Math.pow(1 - Math.pow(down, 0.22), 1 / 0.22) : 1 - down;
+    return smoothstep((f - a) / S.ramp) * out;
   }
 
   // ---- framing: one top orthographic camera (CFG.camera), or the squares' own extent without it
