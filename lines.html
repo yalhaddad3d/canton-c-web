@@ -11,24 +11,26 @@
 </style>
 </head>
 <body>
-<div class="note">Test page for the 3D C. Scroll down: it becomes the line, then the grid wall with its lines. Scroll back up for the C.</div>
+<div class="note">Test page for the 3D C. Scroll down: it becomes the line, then the grid wall with its lines, then pulls back to show the wider wall. Scroll back up for the C.</div>
 <!--
   The 3D C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
-  This version adds a fine grid on each block's face once the grid wall has formed, lit by a wave that travels through
-  the wall with the tubes.
+  The 3D C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
+  This version adds a fine grid on each block's face once the grid wall has formed, lit by the waves that run across
+  the wall with the tubes; each block's grid has its own number of cells, picked afresh for every wave.
   In Webflow: add a Code Embed where the C goes and paste all of this into it.
 
   What it does: the C turns on its own forever, its tubes lighting up and going out in the sweep. Scrolling down
-  through the section bends it into the line and then spreads it into the grid wall; scrolling back up brings it back
-  to the turning C. The C stays pinned on screen while you scroll through the section (its height sets how long the
-  scroll is: 300vh below).
+  through the section bends it into the line and then spreads it into the grid wall, where the light runs across the
+  whole wall from left to right in waves; scrolling further pulls the camera back to show the wall carrying on with
+  more blocks (one network). Scrolling back up reverses it all, back to the turning C. The C stays pinned on screen
+  while you scroll through the section (its height sets how long the scroll is: 400vh below).
 
   Light on purpose: nothing loads until the section is about to scroll into view; three.js comes from a CDN only then;
-  all 60 squares are drawn in 2 draw calls; it only draws while on screen; the pixel ratio is capped at 2; works on
-  WebGL, so every current browser shows it. Visitors who ask for reduced motion get a still C (scrolling still works).
-  Put the URL of c_web.bin in data-src below.
+  all the squares (the C's 60 and the wider wall's) are drawn in 3 draw calls; it only draws while on screen;
+  the pixel ratio is capped at 2; works on WebGL, so every current browser shows it. Visitors who ask for reduced
+  motion get a still C (scrolling still works). Put the URL of c_web.bin in data-src below.
 -->
-<div class="c3d-track" style="position:relative;height:300vh">
+<div class="c3d-track" style="position:relative;height:400vh">
   <div class="c3d" data-src="c_web.bin" data-poster=""
        style="position:sticky;top:0;width:100%;height:100vh;overflow:hidden"></div>
 </div>
@@ -61,30 +63,38 @@ const CFG = {
   ends: 0.8,                 // the line and the grid: how much of their width the screen shows at most (< 1 hides their ends)
                              // (their full height always wins: the rows are never cut)
   fade: 6,                   // on screens too wide to hide the ends, they fade out over this % of the screen width (0 = off)
-  // a fine grid on each block's face (inside its tube) once the grid wall has formed: `cells` across each block, lines
-  // `width` CSS pixels thin, reaching in under the tube. It's lit by a band of light that travels through the wall in
-  // the tubes' order, setting off as the tubes start lighting up and again (at `off` strength, 0 = not at all) as they
-  // start going out; invisible otherwise. `speed`: the band's pace (1 = with the tubes, lower = trailing them);
-  // `strength`: how bright the lit lines are (1 = the tubes' yellow). The band, in blocks: its front sweeps the lines in
-  // as each tube starts lighting, they fade up to full over `rise` blocks, fade back down over the rest of its `length`,
-  // and its tail sweeps them out, so the grid travels from block to block with the tubes. `dim`: how bright the lines
-  // are at the front and tail (1 = no fade); `edge`: how soft the front and tail are (share of a block). null = no grid
-  lines: { cells: 4, width: 0.75, strength: 0.75, speed: 1, length: 1.6, rise: 0.4, dim: 0.3, edge: 0.3, off: 1.0 },
+  // a fine grid on each block's face (inside its tube) once the grid wall has formed, lit by a band of light that runs
+  // across the wall with the waves: its front sweeps the lines in as the tubes start lighting, they fade up to full over
+  // `rise`, back down over the rest of its `length` (both in blocks), and its tail sweeps them out; the same again as
+  // the tubes go out (at `off` strength, 0 = not at all); invisible otherwise. `cells`: how many cells across a block,
+  // each block picking one of these at random (up to 4 sizes; one number = the same on every block), afresh for every
+  // wave with `reshuffle` (the change happens while the block is dark). Lines `width` CSS pixels thin; `strength`: how
+  // bright the lit lines are (1 = the tubes' yellow); `dim`: how bright at the band's front and tail (1 = no fade);
+  // `edge`: how soft its front and tail are (share of a block). null = no grid
+  lines: { cells: [3, 4, 6], reshuffle: true, width: 0.75, strength: 0.75, length: 1.6, rise: 0.4, dim: 0.3, edge: 0.3, off: 1.0 },
+  connect: null,
+  // the tubes on the grid wall: how much they flicker while lit (0 = steady), and how lively
+  tubes: { flicker: 0, flickerSpeed: 1.0 },
   maxPixelRatio: 2,
   // the sweep (as in Maya, in frames of its 288-frame loop at 24 fps): one tube after another from the C's top tip,
   // each fading up over `ramp` frames, all held, then one after another fading out the same way. This is the C's (and
   // the line's) sweep, as on the other pages
   sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 210, outStep: 1.0, ramp: 16, reverse: false },
-  // the sweep once the grid wall has formed (it takes over from `sweep` as the grid forms, and hands back as it breaks
-  // up): the tubes and the grid on the blocks together. `speed`: how fast it plays (1 = as in Maya, lower = slower);
-  // going out at the same pace as lighting up (outStep = inStep); `mirrorOut`: the tubes go out as fast as they appear
-  // to light up (false = Maya's plain fade, which reads as lingering). `loop` is set so the next lighting wave sets off
-  // just as the last tubes go out (no long dark pause between cycles)
-  wallSweep: { loop: 248, inStart: 20, inStep: 1.8, outStart: 160, outStep: 1.8, ramp: 16, reverse: false, speed: 0.4, mirrorOut: true },
+  // the light on the grid wall (it takes over from `sweep` as the grid forms, and hands back as it breaks up): waves
+  // that run across the whole wall from left to right, every row at once, smoothly across each block too (the left of
+  // a tube lights a moment before its right). In seconds: `perBlock`: how long the wave takes to cross one block (lower
+  // = faster); `ramp`: how long a spot takes to fade up (and down); `lit`: how long it stays lit; `every`: the time
+  // from one wave to the next at any spot (the waves follow each other across the wall, so there's always light
+  // somewhere). `mirrorOut`: the tubes go out as fast as they appear to light up; `reverse`: right to left instead
+  wave: { perBlock: 0.45, ramp: 1.6, lit: 5, every: 9, mirrorOut: true, reverse: false },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
-  // section then plays the line and the grid wall, and the finished grid stays on screen for the last `end` before the
-  // section scrolls away. `smooth`: seconds it takes to catch up with the scroll
-  scroll: { hold: 0.05, blend: 0.1, end: 0.15, smooth: 0.15 },
+  // section then plays the line and the grid wall; then over `zoom` the camera pulls back to show the wall carrying on
+  // with more blocks (`zoomOut.amount`), and that stays on screen for the last `end` before the section scrolls away.
+  // `smooth`: seconds it takes to catch up with the scroll
+  scroll: { hold: 0.035, blend: 0.07, zoom: 0.3, end: 0.1, smooth: 0.15 },
+  // the pull back: `amount`: how much more the camera shows at the end (2 = twice as wide and twice as tall). The
+  // extra blocks grow out from the wall as it pulls back, keeping pace with the edges of the screen. 1 = no pull back
+  zoomOut: { amount: 2.2 },
 };
 
 document.querySelectorAll(".c3d[data-src]").forEach((box) => {
@@ -226,17 +236,47 @@ async function start(box) {
   }
   const rGlow = Math.max(rTube, 3 * CFG.spill.reach * half), rShade = Math.max(rTube, 0.5 * CFG.shadow.reach * half);
 
-  // matcap shading, read straight down (orthographic), with a per-square glow (the sweep)
-  const ORTHO = "vec3 viewDir = vec3( 0.0, 0.0, 1.0 );";
+  // the wall's waves, worked out per pixel from where it is across the wall (shared by the blocks, the tubes and the
+  // connectors). uWave: time (s), seconds per block, seconds between waves, where the waves start (x); uWave2: ramp,
+  // lit, mirrorOut, block spacing (negative: right to left); uWave3: the handover from the C's sweep (0..1), forced
+  // light (< 0: none), flicker amount, flicker time
+  const WAVE = { uWave: { value: new THREE.Vector4() }, uWave2: { value: new THREE.Vector4() }, uWave3: { value: new THREE.Vector4(0, -1, 0, 0) } };
+  const WAVE_GLSL = [
+    "uniform vec4 uWave, uWave2, uWave3;",
+    // seconds since the wave last reached this spot (0 .. every)
+    "float wd( float x ) { return mod( uWave.x - uWave.y * ( x - uWave.w ) / uWave2.w, uWave.z ); }",
+    // a tube's light d seconds after the wave reached it: fades up over ramp, stays lit, goes out over ramp
+    "float wlev( float d ) {",
+    "  float up = smoothstep( 0.0, uWave2.x, d ), dn = smoothstep( uWave2.y, uWave2.y + uWave2.x, d );",
+    "  return up * ( uWave2.z > 0.5 ? pow( max( 1.0 - pow( dn, 0.22 ), 0.0 ), 4.5454545 ) : 1.0 - dn );",
+    "}",
+    "float wh( float n ) { return fract( sin( n * 12.9898 + 78.233 ) * 43758.5453 ); }",
+    // the subtle flicker once something is fully lit: slow drifting dips, a little shimmer and the odd quick dip
+    "float wflick( float seed, float t ) {",
+    "  float n = 0.5 + 0.5 * ( 0.55 * sin( 6.2831853 * ( 0.7 * t + wh( seed ) ) ) + 0.3 * sin( 6.2831853 * ( 1.9 * t + wh( seed + 1.7 ) ) ) + 0.15 * sin( 6.2831853 * ( 5.3 * t + wh( seed + 3.1 ) ) ) );",
+    "  return max( 0.6 * n, pow( max( 0.0, sin( 6.2831853 * ( 0.23 * t + wh( seed + 5.3 ) ) ) ), 40.0 ) );",
+    "}",
+    // a square's light at world x: the C's sweep (its own, from the script) handing over to the wall's wave
+    "float wglow( float c, float x, float seed ) {",
+    "  float g = wlev( wd( x ) );",
+    "  g *= 1.0 - uWave3.z * smoothstep( 0.85, 1.0, g ) * wflick( seed, uWave3.w );",
+    "  return mix( c, g, uWave3.x );",
+    "}"].join("\n") + "\n";
+  // matcap shading, read straight down (orthographic), with a per-square glow (the sweep; on the wall, the wave) and
+  // presence (the wider wall's squares fading in)
+  const ORTHO = "vec3 viewDir = vec3( 0.0, 0.0, 1.0 );\nfloat gw = wglow( vGlow, vWX, vSeed );";
   const withGlow = (sh, local) => {
-    sh.vertexShader = "attribute float aGlow;\nvarying float vGlow;\n" + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
-      sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\nvGlow = aGlow;" + (local ? "\nvLocal = position; vLocalN = normal;" : ""));
-    sh.fragmentShader = "varying float vGlow;\n" + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
-      sh.fragmentShader.replace("vec3 viewDir = normalize( vViewPosition );", ORTHO);
+    Object.assign(sh.uniforms, WAVE);
+    sh.vertexShader = "attribute float aGlow, aPres;\nvarying float vGlow, vPres, vWX, vSeed;\n" + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
+      sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\ntransformed *= mix( 0.9, 1.0, aPres );\nvGlow = aGlow; vPres = aPres;\n" +
+        "vWX = ( modelMatrix * instanceMatrix * vec4( position, 1.0 ) ).x; vSeed = float( gl_InstanceID ) * 3.7 + 11.0;" + (local ? "\nvLocal = position; vLocalN = normal;" : ""));
+    sh.fragmentShader = "varying float vGlow, vPres, vWX, vSeed;\n" + WAVE_GLSL + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
+      sh.fragmentShader.replace("vec3 viewDir = normalize( vViewPosition );", ORTHO)
+        .replace("#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= vPres;");
   };
   // the grid on the blocks' faces: its uniforms (set further down, once the finished grid is known)
-  const LN = { uLn: { value: new THREE.Vector4() }, uWv: { value: new THREE.Vector4() }, uWv2: { value: new THREE.Vector4() },
-    uWv3: { value: new THREE.Vector4() }, uLnL: { value: new THREE.Vector3(CFG.look.levels, Math.max(CFG.glow, 1e-3), CFG.brightness) },
+  const LN = { uLn: { value: new THREE.Vector4() }, uLnC: { value: new THREE.Vector4(4, 4, 4, 4) }, uLnN: { value: new THREE.Vector4() },
+    uLnL: { value: new THREE.Vector3(CFG.look.levels, Math.max(CFG.glow, 1e-3), CFG.brightness) },
     uLnTube: { value: tubeTex }, uLnX: { value: new THREE.Vector3() }, uLnB: { value: new THREE.Vector4() } };
   const blockMat = new THREE.MeshMatcapMaterial({ matcap: blockTex });
   blockMat.onBeforeCompile = (sh) => {
@@ -247,16 +287,18 @@ async function start(box) {
       uSpill: { value: new THREE.Color().fromArray(CFG.spill.color).multiplyScalar(CFG.spill.amount) }, uReach: { value: CFG.spill.reach * half } });
     withGlow(sh, true);
     Object.assign(sh.uniforms, LN);
-    sh.vertexShader = "varying float vInst, vWx;\nattribute vec4 aOccA, aOccB, aOccC, aOccD;\nvarying vec3 vOccL;\n" +
+    sh.vertexShader = "varying float vInst, vCx;\nattribute vec4 aOccA, aOccB, aOccC, aOccD;\nvarying vec3 vOccL;\n" +
       sh.vertexShader.replace("vGlow = aGlow;", "vGlow = aGlow;\nvInst = float( gl_InstanceID );\n" +
-        "vWx = ( instanceMatrix * vec4( position, 1.0 ) ).x - instanceMatrix[3].x;\n" +
+        "vCx = ( modelMatrix * instanceMatrix[3] ).x;\n" +
         "vOccL = ( mat4( aOccA, aOccB, aOccC, aOccD ) * ( instanceMatrix * vec4( position, 1.0 ) ) ).xyz;");
-    sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill, uGrain, uShadow;\nuniform float uHalf, uReach, uThick;\nuniform vec2 uRound;\nvarying float vInst, vWx;\nvarying vec3 vOccL;\n" +
-      "uniform vec4 uLn, uWv, uWv2, uWv3, uLnB;\nuniform vec3 uLnL;\nuniform vec3 uLnX;\nuniform sampler2D uLnTube;\n" +
-      "float band( float f, float t, float h, float e ) { float d = f - t, p = uWv2.y * h; d -= uWv3.w * floor( d / uWv3.w + 0.5 );\n" +
+    sh.fragmentShader = "uniform vec3 uU, uV, uN, uSpill, uGrain, uShadow;\nuniform float uHalf, uReach, uThick;\nuniform vec2 uRound;\nvarying float vInst, vCx;\nvarying vec3 vOccL;\n" +
+      "uniform vec4 uLn, uLnB, uLnC, uLnN;\nuniform vec3 uLnL;\nuniform vec3 uLnX;\nuniform sampler2D uLnTube;\n" +
+      // the band of light carrying the grid, d seconds after the wave reached this spot: its front sweeps the lines in, they
+      // fade up to full (rise), back down to dim, and its tail sweeps them out
+      "float band( float d, float h, float e ) { float p = uLnN.z * h;\n" +
       "  float lv = d < p ? mix( uLnX.z, 1.0, smoothstep( 0.0, p, d ) ) : mix( 1.0, uLnX.z, smoothstep( p, h, d ) );\n" +
       "  return smoothstep( - e, 0.0, d ) * ( 1.0 - smoothstep( h, h + e, d ) ) * lv; }\n" +
-      "float gline( float c, float fw, float other, float ext ) { float k = floor( c + 0.5 ); if ( k < 1.0 || k > uLn.z - 1.0 || other < - ext || other > uLn.z + ext ) return 0.0;\n" +
+      "float gline( float c, float fw, float other, float ext, float n ) { float k = floor( c + 0.5 ); if ( k < 1.0 || k > n - 1.0 || other < - ext || other > n + ext ) return 0.0;\n" +
       "  return clamp( 0.5 * uLn.x + 0.5 - abs( c - k ) / max( fw, 1e-5 ), 0.0, 1.0 ); }\n" +
       "float rsq( vec2 p, float a, float r ) { vec2 q = abs( p ) - vec2( a - r ); return length( max( q, 0.0 ) ) + min( max( q.x, q.y ), 0.0 ) - r; }\n" +
       "float h3( vec3 p ) { p = fract( p * 0.3183099 + 0.1 ); p *= 17.0; return fract( p.x * p.y * p.z * ( p.x + p.y + p.z ) ); }\n" +
@@ -274,14 +316,18 @@ async function start(box) {
       "outgoingLight *= 1.0 - uShadow.x * exp( - max( od, 0.0 ) / uShadow.y ) * exp( - oh / uShadow.z );\n" +
       "float edge = - rsq( vec2( dot( vLocal, uU ), dot( vLocal, uV ) ), uHalf, uRound.x );\n" +
       "float face = smoothstep( 0.6, 0.9, abs( dot( normalize( vLocalN ), uN ) ) );\n" +
-      "outgoingLight += vGlow * face * uSpill * exp( - max( edge, 0.0 ) / uReach );\n" +
-      // the grid on the face: lines at whole cells inside the tube, lit by the band passing through the wall
+      "outgoingLight += gw * face * uSpill * exp( - max( edge, 0.0 ) / uReach );\n" +
+      // the grid on the face: lines at whole cells inside the tube, lit by the band passing through the wall with the wave;
+      // each block's number of cells picked at random from the list, afresh for every wave (while it's dark)
       "if ( uLn.w > 0.001 ) {\n" +
-      "  vec2 c = ( vec2( dot( vLocal, uU ), dot( vLocal, uV ) ) / uLn.y + 1.0 ) * 0.5 * uLn.z, fw = fwidth( c );\n" +
-      "  float ext = uLnX.x * smoothstep( 0.0, 0.5, vGlow );\n" +
-      "  float ln = max( gline( c.x, fw.x, c.y, ext ), gline( c.y, fw.y, c.x, ext ) ) * step( 0.9, face );\n" +
-      "  float k = ( uWv3.y > 0.5 ? uWv3.x - 1.0 - vInst : vInst ) + vWx * uWv2.z;\n" +
-      "  float g = uWv3.z >= 0.0 ? uWv3.z : max( band( uWv.x, uWv.y + uWv.z * k, uLnB.x, uLnB.y ), uWv2.w * band( uWv.x, uWv.w + uWv2.x * k, uLnB.z, uLnB.w ) );\n" +
+      "  float cyc = uLnN.x > 0.5 ? floor( ( uWave.x - uWave.y * ( vCx - uWave.w ) / uWave2.w - uLnN.y ) / uWave.z ) : 0.0;\n" +
+      "  float pick = floor( wh( vInst * 1.317 + cyc * 7.771 + 0.5 ) * uLn.z );\n" +
+      "  float n = pick < 0.5 ? uLnC.x : pick < 1.5 ? uLnC.y : pick < 2.5 ? uLnC.z : uLnC.w;\n" +
+      "  vec2 c = ( vec2( dot( vLocal, uU ), dot( vLocal, uV ) ) / uLn.y + 1.0 ) * 0.5 * n, fw = fwidth( c );\n" +
+      "  float ext = uLnX.x * n * smoothstep( 0.0, 0.5, gw );\n" +
+      "  float ln = max( gline( c.x, fw.x, c.y, ext, n ), gline( c.y, fw.y, c.x, ext, n ) ) * step( 0.9, face );\n" +
+      "  float d = wd( vWX );\n" +
+      "  float g = uWave3.y >= 0.0 ? uWave3.y : mix( 0.0, max( max( band( d, uLnB.x, uLnB.y ), band( d - uWave.z, uLnB.x, uLnB.y ) ), uLnN.w * band( d - uWave2.y, uLnB.z, uLnB.w ) ), uWave3.x );\n" +
       "  float a = ln * clamp( g, 0.0, 1.0 ) * uLn.w * uLnX.y;\n" +
       "  if ( a > 0.001 ) {\n" +
       "    float lv = clamp( g * uLnL.y, 0.0, 1.0 ) * ( uLnL.x - 1.0 ), l0 = min( floor( lv ), uLnL.x - 2.0 );\n" +
@@ -302,37 +348,45 @@ async function start(box) {
       "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;",
       "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;\n" +
       "float ndv = clamp( abs( normal.z ), 0.0, 1.0 );\n" +
-      "diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( vGlow, 0.0, 1.0 ) );").replace(
+      "diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( gw, 0.0, 1.0 ) );").replace(
       "vec4 matcapColor = texture2D( matcap, uv );",
-      "float lv = clamp( vGlow * uGlass.z, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );\n" +
+      "float lv = clamp( gw * uGlass.z, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );\n" +
       "vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ),\n" +
       "                        texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );\n" +
-      "matcapColor.rgb *= mix( 1.0, uBright, clamp( vGlow, 0.0, 1.0 ) );");
+      "matcapColor.rgb *= mix( 1.0, uBright, clamp( gw, 0.0, 1.0 ) );");
   };
   const mats = [blockMat, tubeMat];
-  const glow = new THREE.InstancedBufferAttribute(new Float32Array(C.n), 1);
+  // room for the C's squares and the wider wall's (shown as the camera pulls back)
+  const NMAX = C.n + 1500;
+  const glow = new THREE.InstancedBufferAttribute(new Float32Array(NMAX), 1);
   glow.setUsage(THREE.DynamicDrawUsage);
+  const pres = new THREE.InstancedBufferAttribute(new Float32Array(NMAX).fill(1), 1);
+  pres.setUsage(THREE.DynamicDrawUsage);
   // for the shading: every square gets the inverse transform of the square above it
-  const occ = [0, 1, 2, 3].map(() => { const a = new THREE.InstancedBufferAttribute(new Float32Array(C.n * 4), 4); a.setUsage(THREE.DynamicDrawUsage); return a; });
+  const occ = [0, 1, 2, 3].map(() => { const a = new THREE.InstancedBufferAttribute(new Float32Array(NMAX * 4), 4); a.setUsage(THREE.DynamicDrawUsage); return a; });
+  const all = [];
   const meshes = C.parts.map((p) => {
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(p.pos, 3));
     g.setAttribute("normal", new THREE.BufferAttribute(p.nor, 3));
     g.setIndex(new THREE.BufferAttribute(p.idx, 1));
     g.setAttribute("aGlow", glow);
+    g.setAttribute("aPres", pres);
     if (p.mat === 0) ["aOccA", "aOccB", "aOccC", "aOccD"].forEach((nm, k) => g.setAttribute(nm, occ[k]));
-    const m = new THREE.InstancedMesh(g, mats[p.mat] || mats[0], C.n);
+    const m = new THREE.InstancedMesh(g, mats[p.mat] || mats[0], NMAX);
     m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     m.frustumCulled = false;
-    scene.add(m);
+    m.count = C.n;
+    scene.add(m); all.push(m);
     if (p.mat === 1) {
       // the glass's depth first (no colour), so only its front surface is drawn: where a tube's surface folds over itself
       // in a tight corner, it would otherwise be added twice and show as a bright notch
-      const d = new THREE.InstancedMesh(g, new THREE.MeshBasicMaterial({ colorWrite: false }), C.n);
+      const d = new THREE.InstancedMesh(g, new THREE.MeshBasicMaterial({ colorWrite: false }), NMAX);
       d.instanceMatrix = m.instanceMatrix;
       d.frustumCulled = false;
       d.renderOrder = 1;
-      scene.add(d);
+      d.count = C.n;
+      scene.add(d); all.push(d);
     }
     return m;
   });
@@ -366,7 +420,7 @@ async function start(box) {
   }
 
   // ---- the sweep (Maya's level(i, f, n))
-  const S = CFG.sweep, W = CFG.wallSweep || CFG.sweep;
+  const S = CFG.sweep, WV = CFG.wave;
   // (a cycle can run past the end of its loop: what's past the end carries on at the start of the next one)
   function level(S, i, f) { return Math.max(level1(S, i, f), level1(S, i, f + S.loop)); }
   function level1(S, i, f) {
@@ -456,103 +510,278 @@ async function start(box) {
     for (let k = 0; k < NK; k++) { L[k] = footW[k * 4]; R[k] = footW[k * 4 + 1]; }
     plan = { H: ease(Hs, 2).map((h, k) => Math.max(h, FIT[k])), X: ease(X, 2), Z: ease(Z, 2), L, R, fh };
   }
-  let maskNow = "";
-  function frameFixed(fs, w) {
-    let x = fixed.x, z = fixed.z, hh = plan.fh, mask = "none";
+  // the camera at scroll frame fs (w: how far into the scroll animation; g: the same eased, without CFG.camera): where
+  // it looks, its half height, and how far inside the screen the line's / grid's ends are (% of the width, left / right)
+  function view(fs, w, g) {
+    if (!fixed) {
+      const x = camA.x + (camB.x - camA.x) * g, z = camA.z + (camB.z - camA.z) * g;
+      const hw = camA.hw + (camB.hw - camA.hw) * g, hh0 = camA.hh + (camB.hh - camA.hh) * g;
+      return { x, z, hh: Math.max(hh0, hw / aspect) / CFG.zoom, l: 0, r: 0 };
+    }
+    let x = fixed.x, z = fixed.z, hh = plan.fh, l = 0, r = 0;
     if (w > 0) {
       const t = Math.min(fs / STEP, NK - 1), k0 = Math.min(Math.floor(t), NK - 2), a = Math.max(0, t - k0);
       const lerp = (A) => A[k0] + (A[k0 + 1] - A[k0]) * a;
       x += (lerp(plan.X) - x) * w; z += (lerp(plan.Z) - z) * w; hh += (lerp(plan.H) - hh) * w;
-      // ends inside the screen (only on screens wider than the grid): fade them out
-      const hw = hh * aspect, l = (lerp(plan.L) - (x - hw)) / (2 * hw) * 100 * w, r = ((x + hw) - lerp(plan.R)) / (2 * hw) * 100 * w;
-      if (CFG.fade > 0 && (l > 0 || r > 0)) {
-        const f = CFG.fade, p = (v) => v.toFixed(1) + "%";
-        const a0 = Math.max(0, l), b0 = Math.max(0, r);
-        mask = "linear-gradient(90deg," + (l > 0 ? "transparent " + p(a0) + ",#000 " + p(a0 + f) : "#000 0%") + "," +
-          (r > 0 ? "#000 " + p(100 - b0 - f) + ",transparent " + p(100 - b0) : "#000 100%") + ")";
-      }
+      const hw = hh * aspect;
+      l = (lerp(plan.L) - (x - hw)) / (2 * hw) * 100 * w; r = ((x + hw) - lerp(plan.R)) / (2 * hw) * 100 * w;
+    }
+    return { x, z, hh, l, r };
+  }
+  // zp: how far the camera has pulled back (0..1, eased)
+  const zoomBy = (zp) => 1 + (Math.max((CFG.zoomOut && CFG.zoomOut.amount) || 1, 1) - 1) * zp;
+  let maskNow = "";
+  function frame(fs, w, g, zp) {
+    const v = view(fs, w, g);
+    // ends inside the screen (only on screens wider than the grid): fade them out; as the camera pulls back, the wider
+    // wall carries on past them, so the fade goes
+    let mask = "none";
+    const k = 1 - smoothstep(zp / 0.3), l = v.l * k, r = v.r * k, f = CFG.fade * k;
+    if (CFG.fade > 0 && (l > 0 || r > 0)) {
+      const p = (v) => v.toFixed(1) + "%";
+      const a0 = Math.max(0, l), b0 = Math.max(0, r);
+      mask = "linear-gradient(90deg," + (l > 0 ? "transparent " + p(a0) + ",#000 " + p(a0 + f) : "#000 0%") + "," +
+        (r > 0 ? "#000 " + p(100 - b0 - f) + ",transparent " + p(100 - b0) : "#000 100%") + ")";
     }
     if (mask !== maskNow) { maskNow = mask; canvas.style.webkitMaskImage = canvas.style.maskImage = mask; }
+    const hh = v.hh * zoomBy(zp);
     Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
-    camera.position.set(x, top, z); camera.lookAt(x, top - 1, z);
-    camera.updateProjectionMatrix();
-  }
-  function frame(g) {
-    const x = camA.x + (camB.x - camA.x) * g, z = camA.z + (camB.z - camA.z) * g;
-    const hw = camA.hw + (camB.hw - camA.hw) * g, hh0 = camA.hh + (camB.hh - camA.hh) * g;
-    const hh = Math.max(hh0, hw / aspect) / CFG.zoom;
-    Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
-    camera.position.set(x, top, z); camera.lookAt(x, top - 1, z);
+    camera.position.set(v.x, top, v.z); camera.lookAt(v.x, top - 1, v.z);
     camera.updateProjectionMatrix();
   }
 
-  // ---- the grid on the blocks: the wall's spacing and rows from the finished grid (the scroll's last frame), the
-  // inside of the tube (where the grid sits), and which way the tubes' order runs along the rows
-  let lines = null;
-  if (CFG.lines) {
+  // ---- the grid wall: its spacing and rows from the finished grid (the scroll's last frame), the frame from which it
+  // stays formed, the wider wall around it (shown as the camera pulls back), and the grid on the blocks / connectors
+  let wall = null;
+  {
     const P = [];
     for (let i = 0; i < C.n; i++) { at(C.scroll, i, PS, pA, qA); P.push([pA.x, pA.z]); }
     const nn = P.map((p, i) => Math.min(...P.map((q, j) => j === i ? 1e9 : Math.hypot(p[0] - q[0], p[1] - q[1])))).sort((a, b) => a - b);
     const pitch = nn[nn.length >> 1];
     const phase = (vals) => { let s = 0, c = 0; for (const v of vals) { s += Math.sin(2 * Math.PI * v / pitch); c += Math.cos(2 * Math.PI * v / pitch); } return Math.atan2(s, c) / (2 * Math.PI) * pitch; };
     const zp = phase(P.map((p) => p[1])), rows = P.map((p) => Math.round((p[1] - zp) / pitch));
-    const r0 = Math.min(...rows), NR = Math.max(...rows) - r0 + 1, z0 = zp + r0 * pitch;
-    if (NR * Math.round(C.n / NR) !== C.n || !(pitch > 0)) console.warn("[c3d] lines: the end of the scroll isn't a full grid, so no lines");
+    const r0 = Math.min(...rows), NR = Math.max(...rows) - r0 + 1, NC = Math.round(C.n / NR), z0 = zp + r0 * pitch;
+    if (NR * NC !== C.n || !(pitch > 0)) console.warn("[c3d] the end of the scroll isn't a full grid, so no wall effects");
     else {
-      // the inside of the tube (the nearest any of the tube comes to the square's middle): the grid's cells divide it;
-      // where the tube is lit, the lines carry on to its middle, so they run in under it (not through the clear glass)
-      let inner = half, outer = 0;
-      if (tub) for (let k = 0; k < tub.pos.length; k += 3) {
-        const p = new THREE.Vector3(tub.pos[k], tub.pos[k + 1], tub.pos[k + 2]), m = Math.max(Math.abs(p.dot(uAx)), Math.abs(p.dot(vAx)));
-        inner = Math.min(inner, m); outer = Math.max(outer, m);
-      }
-      // along a row, which way does the next square in the tubes' order sit (so the band runs on through the gaps)
-      const dx = [];
-      for (let i = 0; i + 1 < C.n; i++) {
-        const a = W.reverse ? i + 1 : i, b = W.reverse ? i : i + 1;
-        if (rows[a] === rows[b] && Math.abs(Math.abs(P[b][0] - P[a][0]) - pitch) < 0.2 * pitch) dx.push(Math.sign(P[b][0] - P[a][0]));
-      }
-      const dir = dx.reduce((s, v) => s + v, 0) >= 0 ? 1 : -1;
-      const L = CFG.lines;
-      const sp = Math.max(L.speed, 0.05);
-      LN.uWv.value.set(0, W.inStart, W.inStep / sp, W.outStart);   // the band's front: as each tube starts lighting / going out
-      LN.uWv2.value.set(W.outStep / sp, Math.min(Math.max(L.rise / L.length, 0), 1), dir / pitch, L.off);
-      // the band's length and the softness of its front and tail, in frames of the sweep (the tubes' pace, lighting / going out)
-      const on = W.inStep / sp, off = W.outStep / sp;
-      LN.uLnB.value.set(L.length * on, Math.max(L.edge * on, 0.01), L.length * off, Math.max(L.edge * off, 0.01));
-      LN.uLnX.value.set(tub ? ((inner + outer) / 2 - inner) / (2 * inner) * L.cells : 0, L.strength, L.dim);
-      LN.uWv3.value.set(C.n, W.reverse ? 1 : 0, -1, W.loop);
-      // the scroll frame from which the grid stays formed (the tubes' sweep hands over to the wall's from there)
-      let form = PS;
-      for (let f = PS; f >= 0; f--) {
+      // how far every square is from its place in the grid (as a share of the spacing), and where its columns are
+      const gridErr = (X, Z) => {
         let s = 0, c = 0, err = 0;
-        const X = [], Z = [];
-        for (let i = 0; i < C.n; i++) { at(C.scroll, i, f, pA, qA); X.push(pA.x); Z.push(pA.z); const a = 2 * Math.PI * pA.x / pitch; s += Math.sin(a); c += Math.cos(a); }
+        for (let i = 0; i < C.n; i++) { const a = 2 * Math.PI * X[i] / pitch; s += Math.sin(a); c += Math.cos(a); }
         const x0 = Math.atan2(s, c) / (2 * Math.PI) * pitch;
         for (let i = 0; i < C.n; i++) {
           const row = Math.min(NR - 1, Math.max(0, Math.round((Z[i] - z0) / pitch)));
           err += Math.hypot(X[i] - x0 - Math.round((X[i] - x0) / pitch) * pitch, Z[i] - z0 - row * pitch);
         }
-        if (err / (C.n * pitch) > 0.03) break;
+        return { x0, err: err / (C.n * pitch) };
+      };
+      // the scroll frame from which the grid stays formed (the C's sweep hands over to the wall's waves from there)
+      let form = PS;
+      for (let f = PS; f >= 0; f--) {
+        const X = [], Z = [];
+        for (let i = 0; i < C.n; i++) { at(C.scroll, i, f, pA, qA); X.push(pA.x); Z.push(pA.z); }
+        if (gridErr(X, Z).err > 0.03) break;
         form = f;
       }
-      lines = {
-        form,
-        update(w, f) {
-          // how close every square is to its place in the grid: the grid only shows once they're all there
-          let s = 0, c = 0, err = 0;
-          for (let i = 0; i < C.n; i++) { const a = 2 * Math.PI * inst[i].elements[12] / pitch; s += Math.sin(a); c += Math.cos(a); }
-          const x0 = Math.atan2(s, c) / (2 * Math.PI) * pitch;
-          for (let i = 0; i < C.n; i++) {
-            const x = inst[i].elements[12], z = inst[i].elements[14];
-            const row = Math.min(NR - 1, Math.max(0, Math.round((z - z0) / pitch)));
-            err += Math.hypot(x - x0 - Math.round((x - x0) / pitch) * pitch, z - z0 - row * pitch);
+      // the finished grid's columns, and the squares' resting pose on it (the wider wall's squares sit the same way)
+      const xF = gridErr(P.map((p) => p[0]), P.map((p) => p[1])).x0;
+      const cols = P.map((p) => Math.round((p[0] - xF) / pitch)), c0 = Math.min(...cols), c1 = Math.max(...cols);
+      at(C.scroll, 0, PS, pA, qA);
+      const restQ = qA.clone(), restY = pA.y, restP = new THREE.Vector3();
+      // the tube's inside and outside (from the square's middle)
+      let inner = half, outer = half;
+      if (tub) {
+        outer = 0;
+        for (let k = 0; k < tub.pos.length; k += 3) {
+          const p = new THREE.Vector3(tub.pos[k], tub.pos[k + 1], tub.pos[k + 2]), m = Math.max(Math.abs(p.dot(uAx)), Math.abs(p.dot(vAx)));
+          inner = Math.min(inner, m); outer = Math.max(outer, m);
+        }
+      }
+      // the waves set off from the wall's left end (right end with reverse), in seconds
+      const sgn = WV.reverse ? -1 : 1;
+      WAVE.uWave.value.set(0, WV.perBlock, WV.every, xF + (sgn > 0 ? c0 : c1) * pitch);
+      WAVE.uWave2.value.set(Math.max(WV.ramp, 0.01), WV.lit, WV.mirrorOut ? 1 : 0, sgn * pitch);
+      if (WV.lit + 2 * WV.ramp > WV.every) console.warn("[c3d] wave: `every` is shorter than lit + 2 x ramp, so the waves run into each other");
+
+      // the grid on the blocks' faces
+      const L = CFG.lines;
+      if (L) {
+        const list = (Array.isArray(L.cells) ? L.cells : [L.cells]).slice(0, 4);
+        LN.uLnC.value.set(...[0, 1, 2, 3].map((k) => list[Math.min(k, list.length - 1)]));
+        const pb = WV.perBlock, len = L.length * pb, e = Math.max(L.edge * pb, 0.01);
+        LN.uLnB.value.set(len, e, len, e);
+        // a block's cell count changes while it's dark: halfway between the end of one wave's light and the next wave
+        const dark0 = Math.max(WV.lit + WV.ramp, WV.lit + len + e) + 0.5 * pb, dark1 = WV.every - e - 0.5 * pb;
+        LN.uLnN.value.set(L.reshuffle === false ? 0 : 1, (dark0 + dark1) / 2, Math.min(Math.max(L.rise / L.length, 0), 1), L.off);
+        // where the tube is lit, the lines carry on to its middle, so they run in under it (not through the clear glass)
+        LN.uLnX.value.set(tub ? ((inner + outer) / 2 - inner) / (2 * inner) : 0, L.strength, L.dim);
+        LN.uLn.value.set(L.width, inner, list.length, 0);
+      }
+
+      // the wider wall: the grid's cells the pulled-back camera can see, around the C's own 60 (worked out for the screen
+      // shape). They grow out from the wall as the camera pulls back, with the screen's shape (so where the screen
+      // already showed empty space around the wall, like tall phones, the wall visibly spreads into it)
+      const field = { fc0: 0, fc1: -1, fr0: 0, fr1: -1, n: C.n, dist: [] };
+      let full = true;
+      function setField() {
+        const v = view(PS, 1, 1), A = zoomBy(1), hh = v.hh * A + pitch, hw = v.hh * aspect * A + pitch;
+        let fc0 = Math.min(Math.floor((v.x - hw - xF) / pitch), c0), fc1 = Math.max(Math.ceil((v.x + hw - xF) / pitch), c1);
+        let fr0 = Math.min(Math.floor((v.z - hh - z0) / pitch), 0), fr1 = Math.max(Math.ceil((v.z + hh - z0) / pitch), NR - 1);
+        if (A <= 1) { fc0 = c0; fc1 = c1; fr0 = 0; fr1 = NR - 1; }
+        // (very unusual screen shapes: keep within the room there is, trimming the far sides)
+        while ((fc1 - fc0 + 1) * (fr1 - fr0 + 1) > NMAX) {
+          if (fc1 - fc0 >= fr1 - fr0) { if (fc0 < c0) fc0++; if (fc1 > c1) fc1--; } else { if (fr0 < 0) fr0++; if (fr1 > NR - 1) fr1--; }
+        }
+        // how far out the pulled-back camera sees past the wall (from its outer squares' middles), across and up / down
+        const xa = xF + c0 * pitch, xb = xF + c1 * pitch, za = z0, zb = z0 + (NR - 1) * pitch;
+        const Dx = Math.max(v.x + v.hh * aspect * A - xb, xa - (v.x - v.hh * aspect * A), pitch);
+        const Dz = Math.max(v.z + v.hh * A - zb, za - (v.z - v.hh * A), pitch);
+        let n = C.n;
+        field.dist.length = 0;
+        for (let r = fr0; r <= fr1; r++) for (let c = fc0; c <= fc1; c++) {
+          if (c >= c0 && c <= c1 && r >= 0 && r < NR) continue;
+          const x = xF + c * pitch, z = z0 + r * pitch;
+          M.compose(restP.set(x, restY, z), restQ, one);
+          for (const m of meshes) m.setMatrixAt(n, M);
+          for (let k = 0; k < 4; k++) occ[k].array.set(FAR.elements.slice(k * 4, k * 4 + 4), n * 4);
+          glow.array[n] = 0;
+          field.dist.push(Math.max(Math.max(xa - x, x - xb, 0) / Dx, Math.max(za - z, z - zb, 0) / Dz));
+          n++;
+        }
+        Object.assign(field, { fc0, fc1, fr0, fr1, n });
+        for (const m of all) m.count = n;
+        full = true;
+        if (con) con.resize(fc1 - fc0 + 1, fr1 - fr0 + 1);
+      }
+      function setPres(zp) {
+        for (let j = C.n; j < field.n; j++) pres.array[j] = zp <= 0 ? 0 : smoothstep((zp * 1.3 - field.dist[j - C.n]) / 0.3);
+      }
+
+      // the connectors between neighbouring blocks (across each gap, as thick as the tubes, tube to tube)
+      const K = CFG.connect;
+      let con = null;
+      if (K) {
+        const mat = new THREE.ShaderMaterial({
+          transparent: true, depthTest: false, depthWrite: false,
+          uniforms: { uView: { value: new THREE.Vector4() }, uGrid: { value: new THREE.Vector4(xF, z0, pitch, 0) },
+            uCon: { value: new THREE.Vector4(pitch / 2 - outer, (outer - inner) / 2 * K.width, K.halo, K.haloWidth) },
+            uCon2: { value: new THREE.Vector4() }, uCw: { value: new THREE.Vector2(K.dim, Math.max(K.edge * WV.perBlock, 0.01)) },
+            uFld: { value: new THREE.Vector4() }, uPx: { value: 1 }, uCells: { value: null }, uTube: { value: tubeTex },
+            uLv: { value: new THREE.Vector3(CFG.look.levels, Math.max(CFG.glow, 1e-3), CFG.brightness) }, ...WAVE },
+          vertexShader: "varying vec2 vNdc;\nvoid main() { vNdc = position.xy; gl_Position = vec4( position.xy, 0.0, 1.0 ); }",
+          fragmentShader: [
+            "uniform vec4 uView, uGrid, uCon, uCon2, uFld;\nuniform vec2 uCw;\nuniform vec3 uLv;\nuniform float uPx;\nuniform sampler2D uCells, uTube;\nvarying vec2 vNdc;",
+            WAVE_GLSL,
+            // the lit tube's colour at level g, seen from the direction n (on screen: the tube's shading across it)
+            "vec3 lit( float g, vec2 n ) {",
+            "  float lv = clamp( g * uLv.y, 0.0, 1.0 ) * ( uLv.x - 1.0 ), l0 = min( floor( lv ), uLv.x - 2.0 );",
+            "  vec2 uv = n * 0.495 + 0.5;",
+            "  vec3 c = mix( texture2D( uTube, vec2( ( l0 + uv.x ) / uLv.x, uv.y ) ).rgb, texture2D( uTube, vec2( ( l0 + 1.0 + uv.x ) / uLv.x, uv.y ) ).rgb, lv - l0 );",
+            "  return c * mix( 1.0, uLv.z, clamp( g, 0.0, 1.0 ) );",
+            "}",
+            // is there a block in this cell of the grid (and how present)
+            "float cell( float c, float r ) {",
+            "  vec2 q = vec2( c - uFld.x, r - uFld.y );",
+            "  if ( q.x < 0.0 || q.y < 0.0 || q.x >= uFld.z || q.y >= uFld.w ) return 0.0;",
+            "  return texture2D( uCells, ( q + 0.5 ) / uFld.zw ).r;",
+            "}",
+            // d seconds after the wave reached it: its front sweeps it on to dim, then it fades up; going out, the front
+            // sweeps it down to dim, then it fades away
+            "float clev( float d ) {",
+            "  float up = smoothstep( - uCw.y, 0.0, d ) * mix( uCw.x, 1.0, smoothstep( 0.0, uWave2.x, d ) );",
+            "  float b = d - uWave2.y, dn = mix( 1.0, uCw.x * ( 1.0 - smoothstep( 0.0, uWave2.x, b ) ), smoothstep( - uCw.y, 0.0, b ) );",
+            "  return up * dn;",
+            "}",
+            "float clv( float x ) { if ( uWave3.y >= 0.0 ) return uWave3.y; float d = wd( x ); return max( clev( d ), clev( d - uWave.z ) ); }",
+            "void main() {",
+            "  vec2 wp = vec2( uView.x + vNdc.x * uView.z, uView.y - vNdc.y * uView.w );",
+            "  float gx = ( wp.x - uGrid.x ) / uGrid.z, gz = ( wp.y - uGrid.y ) / uGrid.z, P = uGrid.z, hl = uCon.x, rad = uCon.y;",
+            // across a gap in a row (between columns c and c + 1), and between rows (q and q + 1, in column c2): the
+            // nearest, as a rounded bar (along, across), in world units
+            "  float r = floor( gz + 0.5 ), c = floor( gx ), c2 = floor( gx + 0.5 ), q = floor( gz );",
+            "  float ah = ( gx - c - 0.5 ) * P, aH = sign( ah ) * max( abs( ah ) - hl, 0.0 ), xH = ( gz - r ) * P;",
+            "  float av = ( gz - q - 0.5 ) * P, aV = sign( av ) * max( abs( av ) - hl, 0.0 ), xV = ( gx - c2 ) * P;",
+            "  float dH = length( vec2( aH, xH ) ) - rad, dV = length( vec2( xV, aV ) ) - rad;",
+            "  bool hz = dH <= dV;",
+            "  float d = hz ? dH : dV;",
+            "  float p = hz ? min( cell( c, r ), cell( c + 1.0, r ) ) : min( cell( c2, q ), cell( c2, q + 1.0 ) );",
+            "  if ( p < 0.002 ) discard;",
+            "  float g = clv( wp.x );",
+            "  g *= 1.0 - uCon2.z * smoothstep( 0.85, 1.0, g ) * wflick( hz ? c * 7.0 + r * 131.0 : c2 * 7.0 + q * 131.0 + 977.0, uCon2.w );",
+            "  float core = clamp( 0.5 - d / uPx, 0.0, 1.0 ), a = clamp( core + uCon.z * exp( - max( d, 0.0 ) / ( uCon.w * uPx ) ), 0.0, 1.0 );",
+            "  a *= clamp( g, 0.0, 1.0 ) * p * uCon2.x * uCon2.y;",
+            "  if ( a < 0.002 ) discard;",
+            // shaded like a tube across its width (screen up is world -z)
+            "  vec2 n = ( hz ? vec2( aH, - xH ) : vec2( xV, - aV ) ) / max( rad, 1e-5 );",
+            "  n *= min( 1.0, 1.0 / max( length( n ), 1e-5 ) );",
+            "  gl_FragColor = vec4( mix( lit( g, vec2( 0.0 ) ), lit( g, n ), core ), a );",
+            "  #include <colorspace_fragment>",
+            "}"].join("\n"),
+        });
+        const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+        quad.frustumCulled = false; quad.renderOrder = 10; quad.visible = false;
+        scene.add(quad);
+        let tex = null;
+        const buf = new THREE.Vector2();
+        con = {
+          resize(w, h) {
+            if (tex && tex.image.width === w && tex.image.height === h) return;
+            if (tex) tex.dispose();
+            tex = new THREE.DataTexture(new Uint8Array(w * h * 4), w, h, THREE.RGBAFormat);
+            tex.magFilter = tex.minFilter = THREE.NearestFilter; tex.generateMipmaps = false;
+            mat.uniforms.uCells.value = tex;
+          },
+          update(on, x0, X, Z, zp) {
+            quad.visible = on > 0.001 && !!tex;
+            if (!quad.visible) return;
+            const d = tex.image.data, FC = tex.image.width, FR = tex.image.height;
+            d.fill(0);
+            const put = (c, r, v) => { c -= field.fc0; r -= field.fr0; if (c >= 0 && r >= 0 && c < FC && r < FR) d[(r * FC + c) * 4] = Math.round(v * 255); };
+            for (let i = 0; i < C.n; i++) put(Math.round((X[i] - x0) / pitch), Math.round((Z[i] - z0) / pitch), 1);
+            if (zp > 0) {
+              let j = C.n;
+              for (let r = field.fr0; r <= field.fr1; r++) for (let c = field.fc0; c <= field.fc1; c++) {
+                if (c >= c0 && c <= c1 && r >= 0 && r < NR) continue;
+                put(c, r, pres.array[j++]);
+              }
+            }
+            tex.needsUpdate = true;
+            renderer.getDrawingBufferSize(buf);
+            const u = mat.uniforms;
+            u.uView.value.set(camera.position.x, camera.position.z, camera.right, camera.top);
+            u.uGrid.value.x = x0;
+            u.uFld.value.set(field.fc0, field.fr0, FC, FR);
+            u.uCon2.value.set(on, K.strength, K.flicker, clock * K.flickerSpeed);
+            u.uPx.value = 2 * camera.top / buf.y;
+            u.uCon.value.w = K.haloWidth * renderer.getPixelRatio();
+          },
+        };
+      }
+
+      const X = new Array(C.n), Z = new Array(C.n);
+      let lastZp = -1;
+      wall = {
+        form, setField, field,
+        // after the squares have moved: how formed the grid is (the grid lines and connectors show only once it is), the
+        // wider wall's presence, and what goes to the shaders
+        update(w, fs, zp) {
+          for (let i = 0; i < C.n; i++) { X[i] = inst[i].elements[12]; Z[i] = inst[i].elements[14]; }
+          const g = gridErr(X, Z), off = still && forceGlow === null;
+          setPres(zp);
+          if (L) LN.uLn.value.set(L.width * renderer.getPixelRatio(), inner, LN.uLn.value.z, off ? 0 : w * (1 - smoothstep((g.err - 0.01) / 0.04)));
+          if (con) {
+            // they fade in over the stretch of scroll just after the grid has formed (`connect.fadeIn`, a share of the
+            // scroll animation), easing in time too (see loop), and go as the blocks move out of their places
+            conTo = off ? 0 : w * smoothstep((fs - form) / Math.max((K.fadeIn !== undefined ? K.fadeIn : 0.08) * PS, 1));
+            if (handSnap) conOn = conTo;
+            con.update(conOn * (1 - smoothstep((g.err - 0.01) / 0.11)), g.x0, X, Z, zp);
           }
-          const on = still && forceGlow === null ? 0 : w * (1 - smoothstep((err / (C.n * pitch) - 0.01) / 0.04));
-          LN.uLn.value.set(L.width * renderer.getPixelRatio(), inner, L.cells, on);
-          LN.uWv.value.x = f;
-          LN.uWv3.value.z = forceGlow !== null ? forceGlow : -1;
-          return on;
+          // uploads: just the C's squares each frame, the wider wall's when they change
+          const rng = (a, from, count) => { if (!full) a.addUpdateRange(from, count); a.needsUpdate = true; };
+          for (const m of meshes) rng(m.instanceMatrix, 0, C.n * 16);
+          glow.needsUpdate = true;
+          for (const a of occ) rng(a, 0, C.n * 4);
+          if (full || zp !== lastZp || forceGlow !== null) { rng(pres, C.n, field.n - C.n); lastZp = zp; }
+          full = false;
         },
       };
     }
@@ -563,42 +792,50 @@ async function start(box) {
   const FAR = new THREE.Matrix4().makeTranslation(1e4, 1e4, 1e4);   // "nothing above": far away
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
   let clock = 0, last = 0, running = false, shown = false, sNow = progress(), forceGlow = null, hand = 0, handTo = 0, handSnap = true;
+  let conOn = 0, conTo = 0;
   function progress() {
     const r = track.getBoundingClientRect(), span = r.height - innerHeight;
     return span > 0 ? Math.min(1, Math.max(0, -r.top / span)) : 0;
   }
   function draw() {
     const fLoop = still ? 0 : (clock * C.fps) % PL;
-    const fSweep = (clock * C.fps * (S.speed || 1)) % S.loop, fWall = (clock * C.fps * (W.speed || 1)) % W.loop;
-    const span = 1 - CFG.scroll.hold - CFG.scroll.end;
-    const u = Math.min(1, Math.max(0, (sNow - CFG.scroll.hold) / span));
-    const w = smoothstep(u * span / CFG.scroll.blend);
+    const fSweep = (clock * C.fps * (S.speed || 1)) % S.loop;
+    // the scroll: hold, the line and the grid wall (u), then the pull back (zp)
+    const sc = CFG.scroll, zs = zoomBy(1) > 1 ? sc.zoom || 0 : 0;
+    const span = 1 - sc.hold - zs - sc.end;
+    const u = Math.min(1, Math.max(0, (sNow - sc.hold) / span));
+    const w = smoothstep(u * span / sc.blend);
+    const zp = wall && zs > 0 ? smoothstep((sNow - sc.hold - span) / zs) : 0;
     const fScroll = u * PS;
     for (let i = 0; i < C.n; i++) {
       matAt(i, fLoop, fScroll, w);
       for (const m of meshes) m.setMatrixAt(i, M);
       inst[i].copy(M);
     }
-    // the C's sweep, handing over to the wall's as the grid forms
-    if (lines) lines.update(w, fWall);
-    // the wall's sweep takes over once the grid has formed, and only hands back once you've scrolled well back into
-    // the line (so scrolling a little never flips it); the handover itself eases in over a moment (handEase)
-    if (!lines || w < 0.5 || fScroll < lines.form - 0.15 * PS) handTo = 0;
-    else if (fScroll >= lines.form) handTo = 1;
+    // the wall's waves take over from the C's sweep once the grid has formed, and only hand back once you've scrolled
+    // well back into the line (so scrolling a little never flips it); the handover itself eases in over a moment
+    if (!wall || w < 0.5 || fScroll < wall.form - 0.15 * PS) handTo = 0;
+    else if (fScroll >= wall.form) handTo = 1;
     if (handSnap) hand = handTo;
-    handSnap = false;
-    for (let i = 0; i < C.n; i++) glow.array[i] = forceGlow !== null ? forceGlow : still ? 0 :
-      level(S, i, fSweep) + (level(W, i, fWall) - level(S, i, fSweep)) * hand;
+    const n = wall ? wall.field.n : C.n;
+    for (let i = 0; i < n; i++) glow.array[i] = forceGlow !== null ? forceGlow : still || i >= C.n ? 0 : level(S, i, fSweep);
+    const T = CFG.tubes || {};
+    WAVE.uWave.value.x = clock;
+    WAVE.uWave3.value.set(forceGlow !== null || still ? 0 : hand, forceGlow !== null ? forceGlow : -1, T.flicker || 0, clock * (T.flickerSpeed || 1));
     for (let i = 0; i < C.n; i++) {                // the square above each square (the neighbour sitting higher)
       const y = inst[i].elements[13];
       const a = i + 1 < C.n && inst[i + 1].elements[13] > y ? i + 1 : i > 0 && inst[i - 1].elements[13] > y ? i - 1 : -1;
       const e = a < 0 ? FAR.elements : INV.copy(inst[a]).invert().elements;
       for (let k = 0; k < 4; k++) occ[k].array.set(e.slice(k * 4, k * 4 + 4), i * 4);
     }
-    for (const m of meshes) m.instanceMatrix.needsUpdate = true;
-    glow.needsUpdate = true;
-    for (const a of occ) a.needsUpdate = true;
-    if (fixed) frameFixed(fScroll, w); else frame(smoothstep(u / 0.35));
+    frame(fScroll, w, smoothstep(u / 0.35), zp);
+    if (wall) wall.update(w, fScroll, zp);
+    else {
+      for (const m of meshes) m.instanceMatrix.needsUpdate = true;
+      glow.needsUpdate = true;
+      for (const a of occ) a.needsUpdate = true;
+    }
+    handSnap = false;
     renderer.render(scene, camera);
     if (!shown) {
       shown = true;
@@ -609,7 +846,7 @@ async function start(box) {
   }
   // for checking it in the console: set(scroll 0..1, seconds) shows that moment; pause() stops the clock;
   // lightAll(0..1) lights every tube that much (lightAll(null) goes back to the sweep)
-  box.__c3d = { C, meshes, glow, draw, camera, set: (s, t) => { sNow = s; if (t !== undefined) clock = t; handSnap = true; draw(); },
+  box.__c3d = { get wall() { return wall; }, C, meshes, glow, draw, camera, set: (s, t) => { sNow = s; if (t !== undefined) clock = t; handSnap = true; draw(); },
     pause: () => { running = true; renderer.setAnimationLoop(null); }, lightAll: (g) => { forceGlow = g; draw(); } };
 
   function loop(now) {
@@ -617,6 +854,7 @@ async function start(box) {
     last = now;
     if (!still) clock += dt;
     hand += (handTo - hand) * (1 - Math.exp(-dt / 0.6));
+    conOn += (conTo - conOn) * (1 - Math.exp(-dt / 0.2));
     const d = progress() - sNow;
     sNow += CFG.scroll.smooth > 0 ? d * (1 - Math.exp(-dt / CFG.scroll.smooth)) : d;
     if (still && Math.abs(d) < 1e-4) return;
@@ -628,6 +866,7 @@ async function start(box) {
     renderer.setPixelRatio(Math.min(devicePixelRatio || 1, CFG.maxPixelRatio));
     renderer.setSize(w, h, false);
     if (fixed) planCamera();
+    if (wall) wall.setField();
   }
   new ResizeObserver(() => { resize(); draw(); }).observe(box);
   resize();
