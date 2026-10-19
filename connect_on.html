@@ -72,7 +72,7 @@ const CFG = {
   // lively; `fadeIn`: over how much of the scroll animation (after the grid has formed) they fade in as you scroll, and
   // out as you scroll back; `pulse`: how much the band riding the wave (wave.band, below) brightens them and widens their
   // halo as it passes (0 = not at all). null = none
-  connect: { width: 1.0, halo: 0.3, haloWidth: 4, strength: 1.0, dim: 0.15, edge: 0.3, flicker: 0.35, flickerSpeed: 1.0, fadeIn: 0.08, pulse: 1.0 },
+  connect: { width: 1.0, halo: 0.3, haloWidth: 4, strength: 1.0, dim: 0.15, edge: 1.0, flicker: 0.35, flickerSpeed: 1.0, fadeIn: 0.08, pulse: 1.0 },
   // the tubes on the grid wall: how much they flicker while lit with the connectors (0 = steady), and how lively
   tubes: { flicker: 0.3, flickerSpeed: 1.0 },
   maxPixelRatio: 2,
@@ -94,8 +94,8 @@ const CFG = {
   // fades up to full over `rise`, back down over the rest of its `length` (both in blocks: how wide the wave reads), and
   // its tail sweeps out; `dim`: how bright at its front and tail (1 = no fade); `edge`: how soft its front and tail are
   // (share of a block)
-  wave: { perBlock: 0.45, ramp: 1.6, lit: 5, every: 9, tilt: 0.05, curve: 0.3, surge: 0.3, mirrorOut: true, reverse: false,
-          band: { length: 3.5, rise: 0.4, dim: 0.3, edge: 0.3, off: 1.0 } },
+  wave: { perBlock: 0.45, ramp: 2.2, lit: 4.6, every: 9, tilt: 0.05, curve: 0.3, surge: 0.3, mirrorOut: true, reverse: false,
+          band: { length: 3.5, rise: 1.3, dim: 0.15, edge: 1.0, off: 1.0 } },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
   // section then plays the line and the grid wall; then over `zoom` the camera pulls back to show the wall carrying on
   // with more blocks (`zoomOut.amount`), and that stays on screen for the last `end` before the section scrolls away.
@@ -295,7 +295,8 @@ async function start(box) {
         "vec4 wP = modelMatrix * instanceMatrix * vec4( position, 1.0 ); vWX = wP.x; vWZ = wP.z; vSeed = float( gl_InstanceID ) * 3.7 + 11.0;" + (local ? "\nvLocal = position; vLocalN = normal;" : ""));
     sh.fragmentShader = "varying float vGlow, vPres, vWX, vWZ, vSeed;\n" + WAVE_GLSL + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
       sh.fragmentShader.replace("vec3 viewDir = normalize( vViewPosition );", ORTHO)
-        .replace("#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= vPres;");
+        .replace("#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= vPres;")
+        .replace("void main() {", "void main() {\nif ( vPres < 0.004 ) discard;");
   };
   // the grid on the blocks' faces: its uniforms (set further down, once the finished grid is known)
   const LN = { uLn: { value: new THREE.Vector4() }, uLnC: { value: new THREE.Vector4(4, 4, 4, 4) }, uLnN: { value: new THREE.Vector4() },
@@ -666,11 +667,16 @@ async function start(box) {
           n++;
         }
         Object.assign(field, { fc0, fc1, fr0, fr1, n });
-        for (const m of all) m.count = n;
+        shownN = -1;
         full = true;
         if (con) con.resize(fc1 - fc0 + 1, fr1 - fr0 + 1);
       }
+      // the wider wall's squares are only drawn while the camera pulls back (before that they'd sit, unseen, in the way
+      // of the C and the line moving through the same space)
+      let shownN = -1;
       function setPres(zp) {
+        const want = zp > 0 ? field.n : C.n;
+        if (want !== shownN) { shownN = want; for (const m of all) m.count = want; }
         for (let j = C.n; j < field.n; j++) pres.array[j] = zp <= 0 ? 0 : smoothstep((zp * 1.3 - field.dist[j - C.n]) / 0.3);
       }
 
