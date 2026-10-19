@@ -81,22 +81,22 @@ const CFG = {
   // each fading up over `ramp` frames, all held, then one after another fading out the same way. This is the C's (and
   // the line's) sweep, as on the other pages
   sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 210, outStep: 1.0, ramp: 16, reverse: false },
-  // the light on the grid wall (it takes over from `sweep` as the grid forms, and hands back as it breaks up): waves
-  // that run across the whole wall from left to right, every row at once, smoothly across each block too (the left of
-  // a tube lights a moment before its right). In seconds: `perBlock`: how long the wave takes to cross one block (lower
-  // = faster); `ramp`: how long a spot takes to fade up (and down); `lit`: how long it stays lit; `every`: the time
-  // from one wave to the next at any spot (the waves follow each other across the wall, so there's always light
-  // somewhere). The wave's front isn't a straight line marching at one pace: `tilt`: how much later each row down it
-  // arrives (the top sets off first); `curve`: how far (s) its front bows and sways, its shape slowly changing from one
-  // wave to the next; `surge`: how much its pace swells and eases as it travels (0 = steady, 0.3 = 30% faster / slower).
-  // `mirrorOut`: the tubes go out as fast as they appear to light up; `reverse`: right to left instead.
-  // `band`: the band of light riding the wave's front (it carries the grid on the blocks / brightens the connectors),
-  // once as the tubes light up and again (at `off` strength, 0 = not at all) as they go out: its front sweeps in, it
-  // fades up to full over `rise`, back down over the rest of its `length` (both in blocks: how wide the wave reads), and
-  // its tail sweeps out; `dim`: how bright at its front and tail (1 = no fade); `edge`: how soft its front and tail are
-  // (share of a block)
-  wave: { perBlock: 0.38, ramp: 2.8, lit: 3.4, every: 9, tilt: 0.2, curve: 0.4, surge: 0.3, mirrorOut: false, reverse: false,
-          band: { length: 4.5, rise: 1.8, dim: 0.1, edge: 1.5, off: 1.0 } },
+  // the light on the grid wall (it takes over from `sweep` as the grid forms, and hands back as it breaks up): a wave
+  // runs across the screen from left to right lighting everything up (every row at once, smoothly across each block
+  // too), everything stays lit for `holdOn` seconds, a second wave runs across turning it all off, everything stays off
+  // for `holdOff` seconds, and again. In seconds: `cross`: how long a wave takes to cross the screen (on any screen,
+  // pulled back or not); `ramp`: how long each spot takes to fade up (and to go out). The wave's front isn't a straight
+  // line marching at one pace: `tilt`: how far ahead the top of the screen is of the bottom; `curve`: how far its front
+  // bows and sways, its shape slowly changing from one wave to the next; `surge`: how much its pace swells and eases as
+  // it crosses (0 = steady, 0.3 = 30% faster / slower). `mirrorOut`: the tubes go out as quickly as they appear to light
+  // up (false = a plain, softer fade); `reverse`: right to left instead.
+  // `band`: the band of light riding the wave's front (it carries the grid on the blocks / brightens the connectors), as
+  // things light up and again (at `off` strength, 0 = not at all) as they go out: its front sweeps in, it fades up to
+  // full over `rise`, back down over the rest of its `length` (both as shares of the screen's width: how wide the wave
+  // reads), and its tail sweeps out; `dim`: how bright at its front and tail (1 = no fade); `edge`: how soft its front
+  // and tail are (share of the screen's width)
+  wave: { cross: 3.2, ramp: 2.8, holdOn: 1.2, holdOff: 2.0, tilt: 1.2, curve: 0.4, surge: 0.3, mirrorOut: false, reverse: false,
+          band: { length: 0.5, rise: 0.2, dim: 0.1, edge: 0.17, off: 1.0 } },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
   // section then plays the line and the grid wall; then over `zoom` the camera pulls back to show the wall carrying on
   // with more blocks (`zoomOut.amount`), and that stays on screen for the last `end` before the section scrolls away.
@@ -250,18 +250,21 @@ async function start(box) {
   // connectors). uWave: time (s), seconds per block, seconds between waves, where the waves start (x); uWave2: ramp,
   // lit, mirrorOut, block spacing (negative: right to left); uWave3: the handover from the C's sweep (0..1), forced
   // light (< 0: none), flicker amount, flicker time
-  // uWave4: tilt, curve, surge, the wall's middle row (z)
+  // (uWave: time, crossing time, cycle length; uWave2: ramp, how long a spot stays lit, mirrorOut, block spacing;
+  // uWave4: tilt, curve, surge, reverse; uWave5: the screen (camera centre x, z, half width, half height))
   const WAVE = { uWave: { value: new THREE.Vector4() }, uWave2: { value: new THREE.Vector4() }, uWave3: { value: new THREE.Vector4(0, -1, 0, 0) },
-    uWave4: { value: new THREE.Vector4() }, uBand: { value: new THREE.Vector4() }, uBand2: { value: new THREE.Vector4() } };
+    uWave4: { value: new THREE.Vector4() }, uWave5: { value: new THREE.Vector4(0, 0, 1, 1) }, uBand: { value: new THREE.Vector4() }, uBand2: { value: new THREE.Vector4() } };
   const WAVE_GLSL = [
-    "uniform vec4 uWave, uWave2, uWave3, uWave4, uBand, uBand2;",
-    // seconds since the wave last reached this spot (0 .. every): k blocks along, r rows down from the middle. Its pace
-    // swells and eases along the way (surge), the top arrives first (tilt), and the front bows and sways (curve), both
+    "uniform vec4 uWave, uWave2, uWave3, uWave4, uWave5, uBand, uBand2;",
+    // seconds since the lighting wave last reached this spot (0 .. the cycle): u across the screen, v down it. Its pace
+    // swells and eases on the way across (surge), the top arrives first (tilt), and the front bows and sways (curve),
     // drifting slowly so no two waves are quite alike (slowly enough that time at every spot only ever runs forward)
     "float wd( float x, float z ) {",
-    "  float k = ( x - uWave.w ) / uWave2.w, r = ( z - uWave4.w ) / abs( uWave2.w ), t = uWave.x;",
-    "  float at = uWave.y * ( k + uWave4.z * 0.8 * sin( 1.2566 * k + 0.23 * t ) ) + uWave4.x * r",
-    "    + uWave4.y * ( 0.65 * sin( 0.55 * r + 0.17 * t + 0.8 * sin( 0.31 * k ) ) + 0.35 * sin( 1.3 * r - 0.11 * t + 2.0 ) );",
+    "  float u = clamp( ( x - uWave5.x ) / ( 2.0 * uWave5.z ) + 0.5, 0.0, 1.0 ), v = clamp( ( z - uWave5.y ) / ( 2.0 * uWave5.w ) + 0.5, 0.0, 1.0 );",
+    "  if ( uWave4.w > 0.5 ) u = 1.0 - u;",
+    "  float t = uWave.x, k = 9.0 * u, r = 5.0 * v;",
+    "  float at = uWave.y * ( u + uWave4.z / 12.566 * sin( 12.566 * u ) * ( 0.75 + 0.25 * sin( 0.23 * t ) ) ) + uWave4.x * v",
+    "    + uWave4.y * ( 1.0 + 0.65 * sin( 0.55 * r + 0.17 * t + 0.8 * sin( 0.31 * k ) ) + 0.35 * sin( 1.3 * r - 0.11 * t + 2.0 ) );",
     "  return mod( t - at, uWave.z );",
     "}",
     // a tube's light d seconds after the wave reached it: fades up over ramp, stays lit, goes out over ramp
@@ -638,20 +641,24 @@ async function start(box) {
         }
       }
       // the waves set off from the wall's left end (right end with reverse), in seconds
-      const sgn = WV.reverse ? -1 : 1;
-      WAVE.uWave.value.set(0, WV.perBlock, WV.every, xF + (sgn > 0 ? c0 : c1) * pitch);
-      WAVE.uWave2.value.set(Math.max(WV.ramp, 0.01), WV.lit, WV.mirrorOut ? 1 : 0, sgn * pitch);
-      WAVE.uWave4.value.set(WV.tilt || 0, WV.curve || 0, WV.surge || 0, z0 + (NR - 1) / 2 * pitch);
-      const B = WV.band || { length: 1.6, rise: 0.4, dim: 0.3, edge: 0.3, off: 1 };
-      WAVE.uBand.value.set(Math.max(B.length * WV.perBlock, 0.01), Math.max(B.edge * WV.perBlock, 0.01), Math.min(Math.max(B.rise / B.length, 0), 1), B.dim);
+      // the cycle, timed by how it reads on screen: the lighting wave takes about `span` to reach the whole screen; a spot
+      // reads as lit partway into its fade up (pOn: a plain fade out also keeps it reading as lit for a while after it
+      // starts going out, hence earlier), and as out partway into going out (pOff: sooner with mirrorOut). Each spot
+      // stays lit long enough that everything reads as lit for holdOn before the second wave starts turning things off,
+      // and the next lighting wave sets off once everything has read as off for holdOff (measured on rendered frames)
+      const ramp = Math.max(WV.ramp, 0.01), span = WV.cross + 0.5 * ((WV.tilt || 0) + (WV.curve || 0));
+      const pOn = (WV.mirrorOut ? 0.2 : -0.5) * ramp, pOff = (WV.mirrorOut ? 0.15 : 0.8) * ramp, pStart = 0.1 * ramp;
+      const lit = span + pOn + (WV.holdOn || 0), cycle = lit + span + pOff + (WV.holdOff || 0) - pStart;
+      WAVE.uWave.value.set(0, WV.cross, cycle, 0);
+      WAVE.uWave2.value.set(ramp, lit, WV.mirrorOut ? 1 : 0, pitch);
+      WAVE.uWave4.value.set(WV.tilt || 0, WV.curve || 0, WV.surge || 0, WV.reverse ? 1 : 0);
+      const B = WV.band || { length: 0.38, rise: 0.14, dim: 0.15, edge: 0.11, off: 0 };
+      WAVE.uBand.value.set(Math.max(B.length * WV.cross, 0.01), Math.max(B.edge * WV.cross, 0.01), Math.min(Math.max(B.rise / B.length, 0), 1), B.dim);
       WAVE.uBand2.value.set(B.off, CFG.connect ? (CFG.connect.pulse !== undefined ? CFG.connect.pulse : 1) : 0, 0, 0);
-      if (WV.lit + 2 * WV.ramp > WV.every) console.warn("[c3d] wave: `every` is shorter than lit + 2 x ramp, so the waves run into each other");
 
       // the grid on the blocks' faces
       const L = CFG.lines;
       if (L) {
-        // the big grid: its squares' size, lined up on the wall's middle, drifting along at `drift`
-        LN.uLnC.value.set(xF + (c0 + c1) / 2 * pitch, z0 + (NR - 1) / 2 * pitch, (L.drift || 0) * sgn * pitch, 0);
         // where the tube is lit, the lines carry on to its middle, so they run in under it (not through the clear glass)
         LN.uLnX.value.set(tub ? (outer - inner) / 2 : 0, L.strength, 0);
         LN.uLn.value.set(L.width, inner, Math.max(Math.round(L.cells), 2), 0);
@@ -709,7 +716,7 @@ async function start(box) {
           transparent: true, depthTest: false, depthWrite: false,
           uniforms: { uView: { value: new THREE.Vector4() }, uGrid: { value: new THREE.Vector4(xF, z0, pitch, 0) },
             uCon: { value: new THREE.Vector4(pitch / 2 - outer, (outer - inner) / 2 * K.width, K.halo, K.haloWidth) },
-            uCon2: { value: new THREE.Vector4() }, uCw: { value: new THREE.Vector2(K.dim || 0.15, Math.max((K.edge || 1) * WV.perBlock, 0.01)) },
+            uCon2: { value: new THREE.Vector4() }, uCw: { value: new THREE.Vector2(K.dim || 0.15, Math.max((K.edge || 0.1) * WV.cross, 0.01)) },
             uCw2: { value: new THREE.Vector2(K.pulse !== undefined ? K.pulse : 1, 0) },
             uFld: { value: new THREE.Vector4() }, uPx: { value: 1 }, uCells: { value: null }, uTube: { value: tubeTex },
             uLv: { value: new THREE.Vector3(CFG.look.levels, Math.max(CFG.glow, 1e-3), CFG.brightness) }, ...WAVE },
@@ -879,6 +886,7 @@ async function start(box) {
       for (let k = 0; k < 4; k++) occ[k].array.set(e.slice(k * 4, k * 4 + 4), i * 4);
     }
     frame(fScroll, w, smoothstep(u / 0.35), zp);
+    WAVE.uWave5.value.set(camera.position.x, camera.position.z, camera.right, camera.top);   // the waves cross the screen
     if (wall) wall.update(w, fScroll, zp);
     else {
       for (const m of meshes) m.instanceMatrix.needsUpdate = true;
