@@ -993,13 +993,13 @@ async function start(box) {
             tex.magFilter = tex.minFilter = THREE.NearestFilter; tex.generateMipmaps = false;
             mat.uniforms.uCells.value = tex;
           },
-          update(on, x0, X, Z, zp) {
+          update(on, xl, k, X, Z, zp) {
             quad.visible = on > 0.001 && !!tex;
             if (!quad.visible) return;
             const d = tex.image.data, FC = tex.image.width, FR = tex.image.height;
             d.fill(0);
             const put = (c, r, v) => { c -= field.fc0; r -= field.fr0; if (c >= 0 && r >= 0 && c < FC && r < FR) d[(r * FC + c) * 4] = Math.round(v * 255); };
-            for (let i = 0; i < C.n; i++) put(Math.round((X[i] - x0) / pitch), Math.round((Z[i] - z0) / pitch), 1);
+            for (let i = 0; i < C.n; i++) put(Math.round((X[i] - xl) / pitch) + k, Math.round((Z[i] - z0) / pitch), 1);
             if (zp > 0) {
               let j = C.n;
               for (let r = field.fr0; r <= field.fr1; r++) for (let c = field.fc0; c <= field.fc1; c++) {
@@ -1011,8 +1011,8 @@ async function start(box) {
             renderer.getDrawingBufferSize(buf);
             const u = mat.uniforms;
             u.uView.value.set(camera.position.x, camera.position.z, camera.right, camera.top);
-            u.uGrid.value.x = x0;
-            u.uFld.value.set(field.fc0, field.fr0, FC, FR);
+            u.uGrid.value.x = xl;
+            u.uFld.value.set(field.fc0 - k, field.fr0, FC, FR);
             u.uCon2.value.set(on, K.strength, K.flicker, clock * K.flickerSpeed);
             u.uPx.value = 2 * camera.top / buf.y;
             u.uCon.value.w = K.haloWidth * renderer.getPixelRatio();
@@ -1022,6 +1022,11 @@ async function start(box) {
 
       const X = new Array(C.n), Z = new Array(C.n);
       let lastZp = -1;
+      // where the grid's columns are right now: after the grid has formed the wall can still glide sideways for a while
+      // (its blocks wrapping round), so the light patterns tied to the grid (traffic lanes, the signal's cells, the
+      // connectors) follow the blocks as they glide instead of staying put while the blocks move under them. xLat moves
+      // with the blocks continuously; lk: how many whole columns it has moved from the finished grid
+      let xLat = xF, lk = 0;
       wall = {
         form, setField, field,
         // after the squares have moved: how formed the grid is (the grid lines and connectors show only once it is), the
@@ -1029,6 +1034,10 @@ async function start(box) {
         update(w, fs, zp) {
           for (let i = 0; i < C.n; i++) { X[i] = inst[i].elements[12]; Z[i] = inst[i].elements[14]; }
           const g = gridErr(X, Z), off = still && forceGlow === null;
+          if (g.err < 0.05) xLat = g.x0 + pitch * Math.round((xLat - g.x0) / pitch); else xLat = xF;
+          lk = Math.round((xLat - xF) / pitch);
+          WAVE.uNet.value.x = xLat;
+          WAVE.uFld2.value.x = field.fc0 - lk;
           setPres(zp);
           netUpdate();
           if (L) LN.uLn.value.set(L.width * renderer.getPixelRatio(), inner, LN.uLn.value.z, off ? 0 : w * (1 - smoothstep((g.err - 0.01) / 0.04)));
@@ -1037,7 +1046,7 @@ async function start(box) {
             // scroll animation), easing in time too (see loop), and go as the blocks move out of their places
             conTo = off ? 0 : w * smoothstep((fs - form) / Math.max((K.fadeIn !== undefined ? K.fadeIn : 0.08) * PS, 1));
             if (handSnap) conOn = conTo;
-            con.update(conOn * (1 - smoothstep((g.err - 0.01) / 0.11)), g.x0, X, Z, zp);
+            con.update(conOn * (1 - smoothstep((g.err - 0.01) / 0.11)), xLat, lk, X, Z, zp);
           }
           // uploads: just the C's squares each frame, the wider wall's when they change
           const rng = (a, from, count) => { if (!full) a.addUpdateRange(from, count); a.needsUpdate = true; };
