@@ -94,7 +94,7 @@ const CFG = {
   // fades up to full over `rise`, back down over the rest of its `length` (both in blocks: how wide the wave reads), and
   // its tail sweeps out; `dim`: how bright at its front and tail (1 = no fade); `edge`: how soft its front and tail are
   // (share of a block)
-  wave: { perBlock: 0.45, ramp: 2.2, lit: 4.6, every: 9, tilt: 0.15, curve: 0.4, surge: 0.3, mirrorOut: true, reverse: false,
+  wave: { perBlock: 0.38, ramp: 2.2, lit: 4.6, every: 9, tilt: 0.2, curve: 0.4, surge: 0.3, mirrorOut: true, reverse: false,
           band: { length: 3.5, rise: 1.3, dim: 0.15, edge: 1.0, off: 1.0 } },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
   // section then plays the line and the grid wall; then over `zoom` the camera pulls back to show the wall carrying on
@@ -319,10 +319,9 @@ async function start(box) {
       "uniform vec4 uLn, uLnB, uLnC, uLnN;\nuniform vec3 uLnL;\nuniform vec3 uLnX;\nuniform sampler2D uLnTube;\n" +
       // the band of light carrying the grid, d seconds after the wave reached this spot: its front sweeps the lines in, they
       // fade up to full (rise), back down to dim, and its tail sweeps them out
-      // a line of the big grid (at whole cells of c), faded where it would run right alongside the tube (across: how far
-      // the line sits from the block's middle)
-      "float gline( float c, float fw, float across ) { return clamp( 0.5 * uLn.x + 0.5 - abs( c - floor( c + 0.5 ) ) / max( fw, 1e-5 ), 0.0, 1.0 )\n" +
-      "  * ( 1.0 - smoothstep( uLn.y - 0.45 * uLn.z, uLn.y - 0.2 * uLn.z, abs( across ) ) ); }\n" +
+      // a line of the block's grid (at whole cells of c, between the tube's sides), reaching ext cells in under the tube
+      "float gline( float c, float fw, float other, float ext ) { float k = floor( c + 0.5 ); if ( k < 1.0 || k > uLn.z - 1.0 || other < - ext || other > uLn.z + ext ) return 0.0;\n" +
+      "  return clamp( 0.5 * uLn.x + 0.5 - abs( c - k ) / max( fw, 1e-5 ), 0.0, 1.0 ); }\n" +
       "float rsq( vec2 p, float a, float r ) { vec2 q = abs( p ) - vec2( a - r ); return length( max( q, 0.0 ) ) + min( max( q.x, q.y ), 0.0 ) - r; }\n" +
       "float h3( vec3 p ) { p = fract( p * 0.3183099 + 0.1 ); p *= 17.0; return fract( p.x * p.y * p.z * ( p.x + p.y + p.z ) ); }\n" +
       "float vn( vec3 x ) { vec3 i = floor( x ), f = fract( x ); f = f * f * ( 3.0 - 2.0 * f );\n" +
@@ -340,12 +339,12 @@ async function start(box) {
       "float edge = - rsq( vec2( dot( vLocal, uU ), dot( vLocal, uV ) ), uHalf, uRound.x );\n" +
       "float face = smoothstep( 0.6, 0.9, abs( dot( normalize( vLocalN ), uN ) ) );\n" +
       "outgoingLight += gw * face * uSpill * exp( - max( edge, 0.0 ) / uReach );\n" +
-      // the grid on the face: one big grid laid over the whole wall (like a texture), showing on each block inside its tube
-      // (and on under the tube where it's lit), lit by the band passing through the wall with the wave
+      // the grid on the face: cells evenly dividing each block inside its tube (the lines reaching on under the tube where
+      // it's lit), lit by the band passing through the wall with the wave
       "if ( uLn.w > 0.001 ) {\n" +
-      "  vec2 wp = vec2( vWX, vWZ ), o = wp - vC, c = ( wp - uLnC.xy - vec2( uLnC.z * uWave.x, 0.0 ) ) / uLn.z, fw = fwidth( c );\n" +
-      "  float ext = uLnX.x * smoothstep( 0.0, 0.5, gw ), inside = step( max( abs( o.x ), abs( o.y ) ), uLn.y + ext );\n" +
-      "  float ln = max( gline( c.x, fw.x, o.x ), gline( c.y, fw.y, o.y ) ) * inside * step( 0.9, face );\n" +
+      "  vec2 o = vec2( vWX, vWZ ) - vC, c = ( o / uLn.y + 1.0 ) * 0.5 * uLn.z, fw = fwidth( c );\n" +
+      "  float ext = uLnX.x / ( 2.0 * uLn.y ) * uLn.z * smoothstep( 0.0, 0.5, gw );\n" +
+      "  float ln = max( gline( c.x, fw.x, c.y, ext ), gline( c.y, fw.y, c.x, ext ) ) * step( 0.9, face );\n" +
       "  float d = wd( vWX, vWZ );\n" +
       "  float g = uWave3.y >= 0.0 ? uWave3.y : wband( d ) * uWave3.x;\n" +
       "  float a = ln * clamp( g, 0.0, 1.0 ) * uLn.w * uLnX.y;\n" +
@@ -633,7 +632,7 @@ async function start(box) {
         LN.uLnC.value.set(xF + (c0 + c1) / 2 * pitch, z0 + (NR - 1) / 2 * pitch, (L.drift || 0) * sgn * pitch, 0);
         // where the tube is lit, the lines carry on to its middle, so they run in under it (not through the clear glass)
         LN.uLnX.value.set(tub ? (outer - inner) / 2 : 0, L.strength, 0);
-        LN.uLn.value.set(L.width, inner, Math.max(L.cell * pitch, 0.01), 0);
+        LN.uLn.value.set(L.width, inner, Math.max(Math.round(L.cells), 2), 0);
       }
 
       // the wider wall: the grid's cells the pulled-back camera can see, around the C's own 60 (worked out for the screen
