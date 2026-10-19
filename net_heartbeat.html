@@ -15,8 +15,8 @@
 <!--
   The 3D C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
   The 3D C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
-  This version makes the grid wall's network breathe as one: a slow shared pulse eases every tube and then every
-  connector up to full, holds, and eases back down to rest, spreading out from the middle of the screen.
+  This version gives the grid wall's network one heartbeat: a soft double beat (lub-dub) lights every tube and then
+  every connector, spreading out from the middle of the screen; it stays lit for a breath and eases back down to rest.
   In Webflow: add a Code Embed where the C goes and paste all of this into it.
 
   What it does: the C turns on its own forever, its tubes lighting up and going out in the sweep. Scrolling down
@@ -64,11 +64,12 @@ const CFG = {
                              // (their full height always wins: the rows are never cut)
   fade: 6,                   // on screens too wide to hide the ends, they fade out over this % of the screen width (0 = off)
   // how the wall is lit: `mode: "heartbeat"`: the network rests dimly lit (`rest`: its light level, 0..1;
-  // `restBrightness`: how bright, 1 = full) and breathes every `every` seconds: it eases up to full over `rise`, stays
-  // there for `hold`, and eases back down to rest over `fall` (resting for the remainder), reaching the blocks further
-  // from the middle of the screen `spread` seconds per block later, and the connectors `linkDelay` seconds after the
-  // tubes. (the `wave` settings below aren't used in this version)
-  net: { mode: "heartbeat", rest: 0.12, restBrightness: 0.45, every: 6, rise: 1.4, hold: 1.8, fall: 1.6, spread: 0.03, linkDelay: 0.25 },
+  // `restBrightness`: how bright, 1 = full) and has a heartbeat every `every` seconds: a soft double beat (each beat
+  // rising over `beat` seconds, the second `second` seconds after the first) brings it up to full; it stays lit for
+  // `hold`, eases back to rest over `fall`, and rests for the remainder. It reaches the blocks further from the middle of
+  // the screen `spread` seconds per block later, and the connectors `linkDelay` seconds after the tubes. (the `wave`
+  // settings below aren't used in this version)
+  net: { mode: "heartbeat", rest: 0.12, restBrightness: 0.45, every: 6, beat: 0.2, second: 0.42, hold: 1.6, fall: 1.4, spread: 0.03, linkDelay: 0.12 },
   lines: null,
   // the connectors between neighbouring blocks on the grid wall (across each gap, tube to tube), lit by the same waves
   // and exactly with the tubes (fading up, staying lit and going out with them, flickering with them), so the wall reads
@@ -329,16 +330,21 @@ async function start(box) {
     "    vec2 d = abs( p - S.xy ) / uNet.z; float x = ( d.x + d.y - uNetA.y * age ) / uNetA.z;",
     "    s += S.w * exp( - x * x ) * exp( - age / uNetA.w ) * smoothstep( 0.0, 0.25, age ); }",
     "  return s; }",
-    // heartbeat: a slow breath (uNetA: time, seconds per breath, rising, falling; uNetC: holding at full, how much later
-    // it reaches each block further from the middle of the screen): eases up, holds, eases back down to rest
+    // heartbeat: a soft double beat that lights the network, which then stays lit for a breath and eases back to rest
+    // (uNetA: time, seconds per heartbeat, how quickly each beat rises, how long the easing back takes; uNetC: how long it
+    // stays lit, how much later it reaches each block further from the middle of the screen, the second beat's delay)
+    "float hbump( float x, float r, float d ) { return smoothstep( 0.0, r, x ) * exp( - max( x - r, 0.0 ) / d ); }",
     "float heart( vec2 p, float delay ) { float dd = length( p - uWave5.xy ) / uNet.z * uNetC.y, ph = mod( uNetA.x - dd - delay, uNetA.y );",
-    "  float up = smoothstep( 0.0, uNetA.z, ph ), dn = smoothstep( uNetA.z + uNetC.x, uNetA.z + uNetC.x + uNetA.w, ph );",
-    "  return up * ( 1.0 - dn ); }",
+    "  float r = uNetA.z, g = uNetC.z;",
+    "  float lub = 0.7 * hbump( ph, r, 0.25 );",
+    "  float dub = smoothstep( g, g + r, ph ) * ( 0.88 + 0.12 * exp( - max( ph - g - r, 0.0 ) / 0.3 ) )",
+    "    * ( 1.0 - smoothstep( g + r + uNetC.x, g + r + uNetC.x + uNetA.w, ph ) );",
+    "  return max( lub, dub ); }",
     // traffic: packets of light running along lanes (each row: over the tubes' tops one way, under their bottoms the
     // other; each column: down their left sides and their right sides), each lane its own pace, spacing and direction;
     // X: how far along the lane, in blocks (uNetA: time, trail length, share of lanes busy, pace)
     "float lane( float id, float X ) { if ( wh( id * 3.17 + 1.3 ) > uNetA.z ) return 0.0;",
-    "  float dir = wh( id * 5.1 + 2.0 ) < 0.5 ? - 1.0 : 1.0, sp = ( 1.2 + 1.4 * wh( id * 7.3 + 4.0 ) ) * uNetA.w, spc = 4.0 + 6.0 * wh( id * 9.7 + 6.0 );",
+    "  float dir = wh( id * 5.1 + 2.0 ) < 0.5 ? - 1.0 : 1.0, sp = ( 1.2 + 1.4 * wh( id * 7.3 + 4.0 ) ) * uNetA.w, spc = uNetC.x + ( uNetC.y - uNetC.x ) * wh( id * 9.7 + 6.0 );",
     "  float behind = mod( - ( dir * X - sp * uNetA.x - spc * wh( id * 11.0 + 8.0 ) ), spc );",
     "  return exp( - behind / uNetA.y ) + 0.6 * exp( - pow( behind / 0.08, 2.0 ) ); }",
     // along half a tube's square, from the middle of one side (0) round to the middle of the opposite side (1)
@@ -890,9 +896,10 @@ async function start(box) {
           WAVE.uNetA.value.set(t, NT.speed || 5, NT.width || 0.9, NT.life || 2.5);
         } else if (NETM === 3) {
           WAVE.uNetA.value.set(t, NT.trail || 0.9, NT.busy !== undefined ? NT.busy : 0.75, NT.pace || 1);
+          WAVE.uNetC.value.set((NT.spacing || [4, 10])[0], (NT.spacing || [4, 10])[1], 0, 0);
         } else if (NETM === 4) {
-          WAVE.uNetA.value.set(t, NT.every || 6, NT.rise || 1.4, NT.fall || 1.6);
-          WAVE.uNetC.value.set(NT.hold || 1.8, NT.spread || 0.03, 0, 0);
+          WAVE.uNetA.value.set(t, NT.every || 6, NT.beat || 0.2, NT.fall || 1.4);
+          WAVE.uNetC.value.set(NT.hold || 1.6, NT.spread || 0.03, NT.second || 0.42, 0);
         }
         WAVE.uNetB.value.set(NT.rest || 0, NT.restBrightness !== undefined ? NT.restBrightness : 1, NT.linkDelay || 0, 0);
       }
