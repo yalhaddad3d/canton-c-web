@@ -16,7 +16,8 @@
   The 3D C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
   The 3D C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
   This version adds glowing connectors between the blocks of the grid wall, tube to tube and as thick as the tubes: the
-  waves that run across the wall light them with the tubes, and they flicker subtly while lit (energy, connectivity).
+  waves that run across the wall light them with the tubes, and tubes and connectors flicker together while lit, as one
+  network (energy, connectivity).
   In Webflow: add a Code Embed where the C goes and paste all of this into it.
 
   What it does: the C turns on its own forever, its tubes lighting up and going out in the sweep. Scrolling down
@@ -64,17 +65,18 @@ const CFG = {
                              // (their full height always wins: the rows are never cut)
   fade: 6,                   // on screens too wide to hide the ends, they fade out over this % of the screen width (0 = off)
   lines: null,
-  // the connectors between neighbouring blocks on the grid wall (across each gap, tube to tube), lit by the same waves:
-  // as the wave reaches one, its front sweeps it on at `dim` and it fades up to full; going out, the front sweeps it back
-  // down to `dim` and it fades away. `width`: how thick (1 = as thick as the tubes), shaded like a tube, with a soft
+  // the connectors between neighbouring blocks on the grid wall (across each gap, tube to tube), lit by the same waves
+  // and exactly with the tubes (fading up, staying lit and going out with them, flickering with them), so the wall reads
+  // as one network. `width`: how thick (1 = as thick as the tubes), shaded like a tube, with a soft
   // `halo` (strength) `haloWidth` CSS pixels wide; `strength`: how bright (1 = the tubes' yellow); `edge`: how soft the
   // sweeping front is (share of a block); `flicker`: how much they dip while lit (0 = steady), `flickerSpeed`: how
   // lively; `fadeIn`: over how much of the scroll animation (after the grid has formed) they fade in as you scroll, and
-  // out as you scroll back; `pulse`: how much the band riding the wave (wave.band, below) brightens them and widens their
-  // halo as it passes (0 = not at all). null = none
+  // out as you scroll back; `pulse`: how much the band riding the wave (wave.band, below) brightens them (and the tubes) and
+  // widens their halo as it passes (0 = not at all). null = none
   connect: { width: 1.0, halo: 0.3, haloWidth: 4, strength: 1.0, dim: 0.15, edge: 1.0, flicker: 0.35, flickerSpeed: 1.0, fadeIn: 0.08, pulse: 1.0 },
-  // the tubes on the grid wall: how much they flicker while lit with the connectors (0 = steady), and how lively
-  tubes: { flicker: 0.3, flickerSpeed: 1.0 },
+  // the tubes on the grid wall: how much they flicker while lit (0 = steady), and how lively. The tubes and the
+  // connectors flicker as one network (the same flicker across the wall), so keep these the same as connect's
+  tubes: { flicker: 0.35, flickerSpeed: 1.0 },
   maxPixelRatio: 2,
   // the sweep (as in Maya, in frames of its 288-frame loop at 24 fps): one tube after another from the C's top tip,
   // each fading up over `ramp` frames, all held, then one after another fading out the same way. This is the C's (and
@@ -268,13 +270,26 @@ async function start(box) {
     "  float up = smoothstep( 0.0, uWave2.x, d ), dn = smoothstep( uWave2.y, uWave2.y + uWave2.x, d );",
     "  return up * ( uWave2.z > 0.5 ? pow( max( 1.0 - pow( dn, 0.22 ), 0.0 ), 4.5454545 ) : 1.0 - dn );",
     "}",
-    // the band riding the wave's front, d seconds after the wave reached this spot (see wave.band)
+    // the band riding the wave's front, d seconds after the wave reached this spot (see wave.band); going out, it's at
+    // its brightest just as the light starts to go
     "float wb1( float d ) { float h = uBand.x, e = uBand.y, p = uBand.z * h;",
     "  float lv = d < p ? mix( uBand.w, 1.0, smoothstep( 0.0, p, d ) ) : mix( 1.0, uBand.w, smoothstep( p, h, d ) );",
     "  return smoothstep( - e, 0.0, d ) * ( 1.0 - smoothstep( h, h + e, d ) ) * lv; }",
-    "float wband( float d ) { return max( max( wb1( d ), wb1( d - uWave.z ) ), uBand2.x * wb1( d - uWave2.y ) ); }",
+    "float wband( float d ) { return max( max( wb1( d ), wb1( d - uWave.z ) ), uBand2.x * wb1( d - uWave2.y + uBand.z * uBand.x ) ); }",
     "float wh( float n ) { return fract( sin( n * 12.9898 + 78.233 ) * 43758.5453 ); }",
     // the subtle flicker once something is fully lit: slow drifting dips, a little shimmer and the odd quick dip
+    // the flicker once things are fully lit, as one field over the whole wall (so a tube and the connectors meeting it
+    // dip together): soft patches of dimming drifting across the network, and now and then a quick blink rippling
+    // through a region (0 = no dip, 1 = fully out)
+    "float wn2( vec2 p ) { vec2 i = floor( p ), f = fract( p ); f = f * f * ( 3.0 - 2.0 * f );",
+    "  float a = wh( i.x * 7.0 + i.y * 131.0 ), b = wh( i.x * 7.0 + 7.0 + i.y * 131.0 ), c = wh( i.x * 7.0 + i.y * 131.0 + 131.0 ), d = wh( i.x * 7.0 + 7.0 + i.y * 131.0 + 131.0 );",
+    "  return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y ); }",
+    "float wnet( vec2 p, float t ) {",
+    "  vec2 q = p / ( 2.2 * abs( uWave2.w ) );",
+    "  float n = 0.6 * wn2( q + vec2( 0.35, 0.13 ) * t ) + 0.4 * wn2( 2.1 * q - vec2( 0.2, 0.5 ) * t + 7.3 );",
+    "  float blink = pow( max( 0.0, sin( 6.2831853 * ( 0.23 * t + 0.5 * wn2( 0.3 * q + 3.7 ) ) ) ), 40.0 );",
+    "  return max( 0.7 * smoothstep( 0.35, 0.85, n ), blink );",
+    "}",
     "float wflick( float seed, float t ) {",
     "  float n = 0.5 + 0.5 * ( 0.55 * sin( 6.2831853 * ( 0.7 * t + wh( seed ) ) ) + 0.3 * sin( 6.2831853 * ( 1.9 * t + wh( seed + 1.7 ) ) ) + 0.15 * sin( 6.2831853 * ( 5.3 * t + wh( seed + 3.1 ) ) ) );",
     "  return max( 0.6 * n, pow( max( 0.0, sin( 6.2831853 * ( 0.23 * t + wh( seed + 5.3 ) ) ) ), 40.0 ) );",
@@ -282,7 +297,7 @@ async function start(box) {
     // a square's light at world x: the C's sweep (its own, from the script) handing over to the wall's wave
     "float wglow( float c, float x, float z, float seed ) {",
     "  float g = wlev( wd( x, z ) );",
-    "  g *= 1.0 - uWave3.z * smoothstep( 0.85, 1.0, g ) * wflick( seed, uWave3.w );",
+    "  g *= 1.0 - uWave3.z * smoothstep( 0.85, 1.0, g ) * wnet( vec2( x, z ), uWave3.w );",
     "  return mix( c, g, uWave3.x );",
     "}"].join("\n") + "\n";
   // matcap shading, read straight down (orthographic), with a per-square glow (the sweep; on the wall, the wave) and
@@ -369,10 +384,13 @@ async function start(box) {
       "float ndv = clamp( abs( normal.z ), 0.0, 1.0 );\n" +
       "diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( gw, 0.0, 1.0 ) );").replace(
       "vec4 matcapColor = texture2D( matcap, uv );",
+      // (with connectors: the band riding the wave brightens the tubes as it passes, as it does the connectors)
+      "float wb = uWave3.y >= 0.0 ? 0.0 : wband( wd( vWX, vWZ ) ) * uBand2.y * uWave3.x;\n" +
+      "gw = max( gw, wb );\n" +
       "float lv = clamp( gw * uGlass.z, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );\n" +
       "vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ),\n" +
       "                        texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );\n" +
-      "matcapColor.rgb *= mix( 1.0, uBright, clamp( gw, 0.0, 1.0 ) );");
+      "matcapColor.rgb *= mix( 1.0, uBright, clamp( gw, 0.0, 1.0 ) ) * ( 1.0 + 0.4 * wb );");
   };
   const mats = [blockMat, tubeMat];
   // room for the C's squares and the wider wall's (shown as the camera pulls back)
@@ -622,7 +640,7 @@ async function start(box) {
       WAVE.uWave4.value.set(WV.tilt || 0, WV.curve || 0, WV.surge || 0, z0 + (NR - 1) / 2 * pitch);
       const B = WV.band || { length: 1.6, rise: 0.4, dim: 0.3, edge: 0.3, off: 1 };
       WAVE.uBand.value.set(Math.max(B.length * WV.perBlock, 0.01), Math.max(B.edge * WV.perBlock, 0.01), Math.min(Math.max(B.rise / B.length, 0), 1), B.dim);
-      WAVE.uBand2.value.set(B.off, 0, 0, 0);
+      WAVE.uBand2.value.set(B.off, CFG.connect ? (CFG.connect.pulse !== undefined ? CFG.connect.pulse : 1) : 0, 0, 0);
       if (WV.lit + 2 * WV.ramp > WV.every) console.warn("[c3d] wave: `every` is shorter than lit + 2 x ramp, so the waves run into each other");
 
       // the grid on the blocks' faces
@@ -715,7 +733,8 @@ async function start(box) {
             "  float b = d - uWave2.y, dn = mix( 1.0, uCw.x * ( 1.0 - smoothstep( 0.0, uWave2.x, b ) ), smoothstep( - uCw.y, 0.0, b ) );",
             "  return up * dn;",
             "}",
-            "float clv( float d ) { if ( uWave3.y >= 0.0 ) return uWave3.y; return max( clev( d ), clev( d - uWave.z ) ); }",
+            // they light and go out exactly with the tubes (the same light), so tubes and connectors read as one
+            "float clv( float d ) { if ( uWave3.y >= 0.0 ) return uWave3.y; return wlev( d ); }",
             "void main() {",
             "  vec2 wp = vec2( uView.x + vNdc.x * uView.z, uView.y - vNdc.y * uView.w );",
             "  float gx = ( wp.x - uGrid.x ) / uGrid.z, gz = ( wp.y - uGrid.y ) / uGrid.z, P = uGrid.z, hl = uCon.x, rad = uCon.y;",
@@ -730,10 +749,11 @@ async function start(box) {
             "  float p = hz ? min( cell( c, r ), cell( c + 1.0, r ) ) : min( cell( c2, q ), cell( c2, q + 1.0 ) );",
             "  if ( p < 0.002 ) discard;",
             "  float wv = wd( wp.x, wp.y ), g = clv( wv ), b = uWave3.y >= 0.0 ? 0.0 : wband( wv ) * uCw2.x;",
-            "  g *= 1.0 - uCon2.z * smoothstep( 0.85, 1.0, g ) * wflick( hz ? c * 7.0 + r * 131.0 : c2 * 7.0 + q * 131.0 + 977.0, uCon2.w );",
+            "  g *= 1.0 - uCon2.z * smoothstep( 0.85, 1.0, g ) * wnet( wp, uCon2.w );",
             // the band riding the wave's front: brighter, with a wider halo, as it passes
             "  float core = clamp( 0.5 - d / uPx, 0.0, 1.0 ), a = clamp( core + uCon.z * ( 1.0 + b ) * exp( - max( d, 0.0 ) / ( uCon.w * ( 1.0 + 0.4 * b ) * uPx ) ), 0.0, 1.0 );",
-            "  a *= clamp( max( g, b ), 0.0, 1.0 ) * p * uCon2.x * uCon2.y;",
+            // (its coverage follows how lit the tube looks, which stays bright longer than its light level as it goes out)
+            "  a *= sqrt( clamp( max( g, b ), 0.0, 1.0 ) ) * p * uCon2.x * uCon2.y;",
             "  if ( a < 0.002 ) discard;",
             // shaded like a tube across its width (screen up is world -z)
             "  vec2 n = ( hz ? vec2( aH, - xH ) : vec2( xV, - aV ) ) / max( rad, 1e-5 );",
