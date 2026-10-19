@@ -70,8 +70,9 @@ const CFG = {
   // `halo` (strength) `haloWidth` CSS pixels wide; `strength`: how bright (1 = the tubes' yellow); `edge`: how soft the
   // sweeping front is (share of a block); `flicker`: how much they dip while lit (0 = steady), `flickerSpeed`: how
   // lively; `fadeIn`: over how much of the scroll animation (after the grid has formed) they fade in as you scroll, and
-  // out as you scroll back. null = none
-  connect: { width: 1.0, halo: 0.3, haloWidth: 4, strength: 1.0, dim: 0.15, edge: 0.3, flicker: 0.35, flickerSpeed: 1.0, fadeIn: 0.08 },
+  // out as you scroll back; `pulse`: how much the band riding the wave (wave.band, below) brightens them and widens their
+  // halo as it passes (0 = not at all). null = none
+  connect: { width: 1.0, halo: 0.3, haloWidth: 4, strength: 1.0, dim: 0.15, edge: 0.3, flicker: 0.35, flickerSpeed: 1.0, fadeIn: 0.08, pulse: 1.0 },
   // the tubes on the grid wall: how much they flicker while lit with the connectors (0 = steady), and how lively
   tubes: { flicker: 0.3, flickerSpeed: 1.0 },
   maxPixelRatio: 2,
@@ -87,8 +88,14 @@ const CFG = {
   // somewhere). The wave's front isn't a straight line marching at one pace: `tilt`: how much later each row down it
   // arrives (the top sets off first); `curve`: how far (s) its front bows and sways, its shape slowly changing from one
   // wave to the next; `surge`: how much its pace swells and eases as it travels (0 = steady, 0.3 = 30% faster / slower).
-  // `mirrorOut`: the tubes go out as fast as they appear to light up; `reverse`: right to left instead
-  wave: { perBlock: 0.45, ramp: 1.6, lit: 5, every: 9, tilt: 0.05, curve: 0.3, surge: 0.3, mirrorOut: true, reverse: false },
+  // `mirrorOut`: the tubes go out as fast as they appear to light up; `reverse`: right to left instead.
+  // `band`: the band of light riding the wave's front (it carries the grid on the blocks / brightens the connectors),
+  // once as the tubes light up and again (at `off` strength, 0 = not at all) as they go out: its front sweeps in, it
+  // fades up to full over `rise`, back down over the rest of its `length` (both in blocks: how wide the wave reads), and
+  // its tail sweeps out; `dim`: how bright at its front and tail (1 = no fade); `edge`: how soft its front and tail are
+  // (share of a block)
+  wave: { perBlock: 0.45, ramp: 1.6, lit: 5, every: 9, tilt: 0.05, curve: 0.3, surge: 0.3, mirrorOut: true, reverse: false,
+          band: { length: 3.5, rise: 0.4, dim: 0.3, edge: 0.3, off: 1.0 } },
   // the scroll, as shares of the section: the C keeps turning for `hold`, then eases into the line over `blend`; the
   // section then plays the line and the grid wall; then over `zoom` the camera pulls back to show the wall carrying on
   // with more blocks (`zoomOut.amount`), and that stays on screen for the last `end` before the section scrolls away.
@@ -244,9 +251,9 @@ async function start(box) {
   // light (< 0: none), flicker amount, flicker time
   // uWave4: tilt, curve, surge, the wall's middle row (z)
   const WAVE = { uWave: { value: new THREE.Vector4() }, uWave2: { value: new THREE.Vector4() }, uWave3: { value: new THREE.Vector4(0, -1, 0, 0) },
-    uWave4: { value: new THREE.Vector4() } };
+    uWave4: { value: new THREE.Vector4() }, uBand: { value: new THREE.Vector4() }, uBand2: { value: new THREE.Vector4() } };
   const WAVE_GLSL = [
-    "uniform vec4 uWave, uWave2, uWave3, uWave4;",
+    "uniform vec4 uWave, uWave2, uWave3, uWave4, uBand, uBand2;",
     // seconds since the wave last reached this spot (0 .. every): k blocks along, r rows down from the middle. Its pace
     // swells and eases along the way (surge), the top arrives first (tilt), and the front bows and sways (curve), both
     // drifting slowly so no two waves are quite alike (slowly enough that time at every spot only ever runs forward)
@@ -261,6 +268,11 @@ async function start(box) {
     "  float up = smoothstep( 0.0, uWave2.x, d ), dn = smoothstep( uWave2.y, uWave2.y + uWave2.x, d );",
     "  return up * ( uWave2.z > 0.5 ? pow( max( 1.0 - pow( dn, 0.22 ), 0.0 ), 4.5454545 ) : 1.0 - dn );",
     "}",
+    // the band riding the wave's front, d seconds after the wave reached this spot (see wave.band)
+    "float wb1( float d ) { float h = uBand.x, e = uBand.y, p = uBand.z * h;",
+    "  float lv = d < p ? mix( uBand.w, 1.0, smoothstep( 0.0, p, d ) ) : mix( 1.0, uBand.w, smoothstep( p, h, d ) );",
+    "  return smoothstep( - e, 0.0, d ) * ( 1.0 - smoothstep( h, h + e, d ) ) * lv; }",
+    "float wband( float d ) { return max( max( wb1( d ), wb1( d - uWave.z ) ), uBand2.x * wb1( d - uWave2.y ) ); }",
     "float wh( float n ) { return fract( sin( n * 12.9898 + 78.233 ) * 43758.5453 ); }",
     // the subtle flicker once something is fully lit: slow drifting dips, a little shimmer and the odd quick dip
     "float wflick( float seed, float t ) {",
@@ -306,9 +318,6 @@ async function start(box) {
       "uniform vec4 uLn, uLnB, uLnC, uLnN;\nuniform vec3 uLnL;\nuniform vec3 uLnX;\nuniform sampler2D uLnTube;\n" +
       // the band of light carrying the grid, d seconds after the wave reached this spot: its front sweeps the lines in, they
       // fade up to full (rise), back down to dim, and its tail sweeps them out
-      "float band( float d, float h, float e ) { float p = uLnN.z * h;\n" +
-      "  float lv = d < p ? mix( uLnX.z, 1.0, smoothstep( 0.0, p, d ) ) : mix( 1.0, uLnX.z, smoothstep( p, h, d ) );\n" +
-      "  return smoothstep( - e, 0.0, d ) * ( 1.0 - smoothstep( h, h + e, d ) ) * lv; }\n" +
       // a line of the big grid (at whole cells of c), faded where it would run right alongside the tube (across: how far
       // the line sits from the block's middle)
       "float gline( float c, float fw, float across ) { return clamp( 0.5 * uLn.x + 0.5 - abs( c - floor( c + 0.5 ) ) / max( fw, 1e-5 ), 0.0, 1.0 )\n" +
@@ -337,7 +346,7 @@ async function start(box) {
       "  float ext = uLnX.x * smoothstep( 0.0, 0.5, gw ), inside = step( max( abs( o.x ), abs( o.y ) ), uLn.y + ext );\n" +
       "  float ln = max( gline( c.x, fw.x, o.x ), gline( c.y, fw.y, o.y ) ) * inside * step( 0.9, face );\n" +
       "  float d = wd( vWX, vWZ );\n" +
-      "  float g = uWave3.y >= 0.0 ? uWave3.y : mix( 0.0, max( max( band( d, uLnB.x, uLnB.y ), band( d - uWave.z, uLnB.x, uLnB.y ) ), uLnN.w * band( d - uWave2.y, uLnB.z, uLnB.w ) ), uWave3.x );\n" +
+      "  float g = uWave3.y >= 0.0 ? uWave3.y : wband( d ) * uWave3.x;\n" +
       "  float a = ln * clamp( g, 0.0, 1.0 ) * uLn.w * uLnX.y;\n" +
       "  if ( a > 0.001 ) {\n" +
       "    float lv = clamp( g * uLnL.y, 0.0, 1.0 ) * ( uLnL.x - 1.0 ), l0 = min( floor( lv ), uLnL.x - 2.0 );\n" +
@@ -611,18 +620,18 @@ async function start(box) {
       WAVE.uWave.value.set(0, WV.perBlock, WV.every, xF + (sgn > 0 ? c0 : c1) * pitch);
       WAVE.uWave2.value.set(Math.max(WV.ramp, 0.01), WV.lit, WV.mirrorOut ? 1 : 0, sgn * pitch);
       WAVE.uWave4.value.set(WV.tilt || 0, WV.curve || 0, WV.surge || 0, z0 + (NR - 1) / 2 * pitch);
+      const B = WV.band || { length: 1.6, rise: 0.4, dim: 0.3, edge: 0.3, off: 1 };
+      WAVE.uBand.value.set(Math.max(B.length * WV.perBlock, 0.01), Math.max(B.edge * WV.perBlock, 0.01), Math.min(Math.max(B.rise / B.length, 0), 1), B.dim);
+      WAVE.uBand2.value.set(B.off, 0, 0, 0);
       if (WV.lit + 2 * WV.ramp > WV.every) console.warn("[c3d] wave: `every` is shorter than lit + 2 x ramp, so the waves run into each other");
 
       // the grid on the blocks' faces
       const L = CFG.lines;
       if (L) {
-        const pb = WV.perBlock, len = L.length * pb, e = Math.max(L.edge * pb, 0.01);
-        LN.uLnB.value.set(len, e, len, e);
-        LN.uLnN.value.set(0, 0, Math.min(Math.max(L.rise / L.length, 0), 1), L.off);
         // the big grid: its squares' size, lined up on the wall's middle, drifting along at `drift`
         LN.uLnC.value.set(xF + (c0 + c1) / 2 * pitch, z0 + (NR - 1) / 2 * pitch, (L.drift || 0) * sgn * pitch, 0);
         // where the tube is lit, the lines carry on to its middle, so they run in under it (not through the clear glass)
-        LN.uLnX.value.set(tub ? (outer - inner) / 2 : 0, L.strength, L.dim);
+        LN.uLnX.value.set(tub ? (outer - inner) / 2 : 0, L.strength, 0);
         LN.uLn.value.set(L.width, inner, Math.max(L.cell * pitch, 0.01), 0);
       }
 
@@ -674,11 +683,12 @@ async function start(box) {
           uniforms: { uView: { value: new THREE.Vector4() }, uGrid: { value: new THREE.Vector4(xF, z0, pitch, 0) },
             uCon: { value: new THREE.Vector4(pitch / 2 - outer, (outer - inner) / 2 * K.width, K.halo, K.haloWidth) },
             uCon2: { value: new THREE.Vector4() }, uCw: { value: new THREE.Vector2(K.dim, Math.max(K.edge * WV.perBlock, 0.01)) },
+            uCw2: { value: new THREE.Vector2(K.pulse !== undefined ? K.pulse : 1, 0) },
             uFld: { value: new THREE.Vector4() }, uPx: { value: 1 }, uCells: { value: null }, uTube: { value: tubeTex },
             uLv: { value: new THREE.Vector3(CFG.look.levels, Math.max(CFG.glow, 1e-3), CFG.brightness) }, ...WAVE },
           vertexShader: "varying vec2 vNdc;\nvoid main() { vNdc = position.xy; gl_Position = vec4( position.xy, 0.0, 1.0 ); }",
           fragmentShader: [
-            "uniform vec4 uView, uGrid, uCon, uCon2, uFld;\nuniform vec2 uCw;\nuniform vec3 uLv;\nuniform float uPx;\nuniform sampler2D uCells, uTube;\nvarying vec2 vNdc;",
+            "uniform vec4 uView, uGrid, uCon, uCon2, uFld;\nuniform vec2 uCw, uCw2;\nuniform vec3 uLv;\nuniform float uPx;\nuniform sampler2D uCells, uTube;\nvarying vec2 vNdc;",
             WAVE_GLSL,
             // the lit tube's colour at level g, seen from the direction n (on screen: the tube's shading across it)
             "vec3 lit( float g, vec2 n ) {",
@@ -700,7 +710,7 @@ async function start(box) {
             "  float b = d - uWave2.y, dn = mix( 1.0, uCw.x * ( 1.0 - smoothstep( 0.0, uWave2.x, b ) ), smoothstep( - uCw.y, 0.0, b ) );",
             "  return up * dn;",
             "}",
-            "float clv( vec2 p ) { if ( uWave3.y >= 0.0 ) return uWave3.y; float d = wd( p.x, p.y ); return max( clev( d ), clev( d - uWave.z ) ); }",
+            "float clv( float d ) { if ( uWave3.y >= 0.0 ) return uWave3.y; return max( clev( d ), clev( d - uWave.z ) ); }",
             "void main() {",
             "  vec2 wp = vec2( uView.x + vNdc.x * uView.z, uView.y - vNdc.y * uView.w );",
             "  float gx = ( wp.x - uGrid.x ) / uGrid.z, gz = ( wp.y - uGrid.y ) / uGrid.z, P = uGrid.z, hl = uCon.x, rad = uCon.y;",
@@ -714,15 +724,17 @@ async function start(box) {
             "  float d = hz ? dH : dV;",
             "  float p = hz ? min( cell( c, r ), cell( c + 1.0, r ) ) : min( cell( c2, q ), cell( c2, q + 1.0 ) );",
             "  if ( p < 0.002 ) discard;",
-            "  float g = clv( wp );",
+            "  float wv = wd( wp.x, wp.y ), g = clv( wv ), b = uWave3.y >= 0.0 ? 0.0 : wband( wv ) * uCw2.x;",
             "  g *= 1.0 - uCon2.z * smoothstep( 0.85, 1.0, g ) * wflick( hz ? c * 7.0 + r * 131.0 : c2 * 7.0 + q * 131.0 + 977.0, uCon2.w );",
-            "  float core = clamp( 0.5 - d / uPx, 0.0, 1.0 ), a = clamp( core + uCon.z * exp( - max( d, 0.0 ) / ( uCon.w * uPx ) ), 0.0, 1.0 );",
-            "  a *= clamp( g, 0.0, 1.0 ) * p * uCon2.x * uCon2.y;",
+            // the band riding the wave's front: brighter, with a wider halo, as it passes
+            "  float core = clamp( 0.5 - d / uPx, 0.0, 1.0 ), a = clamp( core + uCon.z * ( 1.0 + b ) * exp( - max( d, 0.0 ) / ( uCon.w * ( 1.0 + 0.4 * b ) * uPx ) ), 0.0, 1.0 );",
+            "  a *= clamp( max( g, b ), 0.0, 1.0 ) * p * uCon2.x * uCon2.y;",
             "  if ( a < 0.002 ) discard;",
             // shaded like a tube across its width (screen up is world -z)
             "  vec2 n = ( hz ? vec2( aH, - xH ) : vec2( xV, - aV ) ) / max( rad, 1e-5 );",
             "  n *= min( 1.0, 1.0 / max( length( n ), 1e-5 ) );",
-            "  gl_FragColor = vec4( mix( lit( g, vec2( 0.0 ) ), lit( g, n ), core ), a );",
+            "  float gl = clamp( max( g, b ), 0.0, 1.0 );",
+            "  gl_FragColor = vec4( mix( lit( gl, vec2( 0.0 ) ), lit( gl, n ), core ) * ( 1.0 + 0.4 * b ), a );",
             "  #include <colorspace_fragment>",
             "}"].join("\n"),
         });
