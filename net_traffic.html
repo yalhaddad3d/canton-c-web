@@ -346,14 +346,20 @@ async function start(box) {
     // X: how far along the lane, in blocks (uNetA: time, trail length, share of lanes busy, pace)
     "float lane( float id, float X ) { if ( wh( id * 3.17 + 1.3 ) > uNetA.z ) return 0.0;",
     "  float dir = wh( id * 5.1 + 2.0 ) < 0.5 ? - 1.0 : 1.0, sp = ( 1.2 + 1.4 * wh( id * 7.3 + 4.0 ) ) * uNetA.w, spc = uNetC.x + ( uNetC.y - uNetC.x ) * wh( id * 9.7 + 6.0 );",
-    "  float behind = mod( - ( dir * X - sp * uNetA.x - spc * wh( id * 11.0 + 8.0 ) ), spc );",
-    "  return exp( - behind / uNetA.y ) + 0.6 * exp( - pow( behind / 0.08, 2.0 ) ); }",
+    "  float behind = mod( - ( dir * X - sp * uNetA.x - spc * wh( id * 11.0 + 8.0 ) ), spc ), ahead = spc - behind;",
+    // a soft glowing head and a tail fading behind it (both easing to nothing, so there's no hard edge anywhere)
+    "  float tail = exp( - behind / uNetA.y ) * smoothstep( 0.0, 0.12, behind ) * ( 1.0 - smoothstep( 0.6 * spc, spc, behind ) );",
+    "  return tail + 0.8 * exp( - pow( min( behind, ahead ) / 0.1, 2.0 ) ); }",
     // along half a tube's square, from the middle of one side (0) round to the middle of the opposite side (1)
     "float perim( float a, float b, float m ) { if ( abs( a ) > abs( b ) ) { float s = 0.25 * min( abs( b ) / m, 1.0 ); return a < 0.0 ? s : 1.0 - s; }",
     "  return 0.25 + 0.5 * clamp( ( a + m ) / ( 2.0 * m ), 0.0, 1.0 ); }",
-    "float traf( vec2 p ) { vec2 c = ncell( p ), l = p - ( uNet.xy + c * uNet.z ); float m = uNet.w;",
-    "  float H = lane( c.y * 2.0 + ( l.y < 0.0 ? 0.0 : 1.0 ), c.x - 0.4 + 0.8 * perim( l.x, l.y, m ) );",
-    "  float V = lane( 1000.0 + c.x * 2.0 + ( l.x < 0.0 ? 0.0 : 1.0 ), c.y - 0.4 + 0.8 * perim( l.y, l.x, m ) );",
+    // (p is first taken onto the tube's square, so the faces glow from the tube beside them; where two lanes meet, at
+    // the middle of each side, they blend smoothly into each other)
+    "float traf( vec2 p ) { vec2 c = ncell( p ), l = p - ( uNet.xy + c * uNet.z ); float m = uNet.w, w = 0.15 * m;",
+    "  l *= m / max( max( abs( l.x ), abs( l.y ) ), 1e-4 );",
+    "  float X = c.x - 0.4 + 0.8 * perim( l.x, l.y, m ), Y = c.y - 0.4 + 0.8 * perim( l.y, l.x, m );",
+    "  float H = max( lane( c.y * 2.0, X ) * ( 1.0 - smoothstep( 0.0, w, l.y ) ), lane( c.y * 2.0 + 1.0, X ) * smoothstep( - w, 0.0, l.y ) );",
+    "  float V = max( lane( 1000.0 + c.x * 2.0, Y ) * ( 1.0 - smoothstep( 0.0, w, l.x ) ), lane( 1000.0 + c.x * 2.0 + 1.0, Y ) * smoothstep( - w, 0.0, l.x ) );",
     "  return max( H, V ); }",
     // a spot's light level, and a brightness multiplier on top (uNetB: the network's resting level and brightness)
     "float netLevel( vec2 p ) {",
