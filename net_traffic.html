@@ -16,8 +16,8 @@
   The 3D C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
   The 3D C for Webflow, played from c_web.bin (made by export_c_web.py in Houdini) with three.js.
   This version keeps the grid wall's network dimly lit while small packets of light run through it like data: along
-  each row (over the tubes' tops one way, under their bottoms the other) and each column, across the connectors from
-  block to block.
+  each row and down each column, splitting around each tube and joining up again on its far side, across the
+  connectors from block to block.
   In Webflow: add a Code Embed where the C goes and paste all of this into it.
 
   What it does: the C turns on its own forever, its tubes lighting up and going out in the sweep. Scrolling down
@@ -65,12 +65,12 @@ const CFG = {
                              // (their full height always wins: the rows are never cut)
   fade: 6,                   // on screens too wide to hide the ends, they fade out over this % of the screen width (0 = off)
   // how the wall is lit: `mode: "traffic"`: the network rests dimly lit (`rest`: its light level, 0..1;
-  // `restBrightness`: how bright, 1 = full) while packets run along lanes (each row over the tubes' tops one way and
-  // under their bottoms the other, each column down the tubes' left and right sides), each lane at its own pace and
+  // `restBrightness`: how bright, 1 = full) while packets run along lanes (one along each row, one down each column),
+  // splitting around both sides of each tube and joining up again on the far side, each lane at its own pace and
   // spacing. `busy`: the share of lanes with traffic; `spacing`: how far apart the packets on a lane are (blocks, each
   // lane somewhere in this range); `pace`: how fast (1 = 1.2 to 2.6 blocks per second); `trail`: how long each packet's
   // tail is (blocks). (the `wave` settings below aren't used in this version)
-  net: { mode: "traffic", rest: 0.12, restBrightness: 0.45, busy: 0.9, spacing: [3, 7], pace: 1, trail: 0.9 },
+  net: { mode: "traffic", rest: 0.12, restBrightness: 0.45, busy: 0.9, spacing: [2.5, 5], pace: 1, trail: 0.9 },
   lines: null,
   // the connectors between neighbouring blocks on the grid wall (across each gap, tube to tube), lit by the same waves
   // and exactly with the tubes (fading up, staying lit and going out with them, flickering with them), so the wall reads
@@ -341,9 +341,10 @@ async function start(box) {
     "  float dub = smoothstep( g, g + r, ph ) * ( 0.88 + 0.12 * exp( - max( ph - g - r, 0.0 ) / 0.3 ) )",
     "    * ( 1.0 - smoothstep( g + r + uNetC.x, g + r + uNetC.x + uNetA.w, ph ) );",
     "  return max( lub, dub ); }",
-    // traffic: packets of light running along lanes (each row: over the tubes' tops one way, under their bottoms the
-    // other; each column: down their left sides and their right sides), each lane its own pace, spacing and direction;
-    // X: how far along the lane, in blocks (uNetA: time, trail length, share of lanes busy, pace)
+    // traffic: packets of light running along lanes (one along each row, one down each column), each lane its own pace,
+    // spacing and direction; at each block a packet splits around both sides of its tube and joins up again on the far
+    // side, on into the next connector (so no lane ever stops short); X: how far along the lane, in blocks (uNetA: time,
+    // trail length, share of lanes busy, pace)
     "float lane( float id, float X ) { if ( wh( id * 3.17 + 1.3 ) > uNetA.z ) return 0.0;",
     "  float dir = wh( id * 5.1 + 2.0 ) < 0.5 ? - 1.0 : 1.0, sp = ( 1.2 + 1.4 * wh( id * 7.3 + 4.0 ) ) * uNetA.w, spc = uNetC.x + ( uNetC.y - uNetC.x ) * wh( id * 9.7 + 6.0 );",
     "  float behind = mod( - ( dir * X - sp * uNetA.x - spc * wh( id * 11.0 + 8.0 ) ), spc ), ahead = spc - behind;",
@@ -353,14 +354,10 @@ async function start(box) {
     // along half a tube's square, from the middle of one side (0) round to the middle of the opposite side (1)
     "float perim( float a, float b, float m ) { if ( abs( a ) > abs( b ) ) { float s = 0.25 * min( abs( b ) / m, 1.0 ); return a < 0.0 ? s : 1.0 - s; }",
     "  return 0.25 + 0.5 * clamp( ( a + m ) / ( 2.0 * m ), 0.0, 1.0 ); }",
-    // (p is first taken onto the tube's square, so the faces glow from the tube beside them; where two lanes meet, at
-    // the middle of each side, they blend smoothly into each other)
-    "float traf( vec2 p ) { vec2 c = ncell( p ), l = p - ( uNet.xy + c * uNet.z ); float m = uNet.w, w = 0.15 * m;",
+    // (p is first taken onto the tube's square, so the faces glow from the tube beside them)
+    "float traf( vec2 p ) { vec2 c = ncell( p ), l = p - ( uNet.xy + c * uNet.z ); float m = uNet.w;",
     "  l *= m / max( max( abs( l.x ), abs( l.y ) ), 1e-4 );",
-    "  float X = c.x - 0.4 + 0.8 * perim( l.x, l.y, m ), Y = c.y - 0.4 + 0.8 * perim( l.y, l.x, m );",
-    "  float H = max( lane( c.y * 2.0, X ) * ( 1.0 - smoothstep( 0.0, w, l.y ) ), lane( c.y * 2.0 + 1.0, X ) * smoothstep( - w, 0.0, l.y ) );",
-    "  float V = max( lane( 1000.0 + c.x * 2.0, Y ) * ( 1.0 - smoothstep( 0.0, w, l.x ) ), lane( 1000.0 + c.x * 2.0 + 1.0, Y ) * smoothstep( - w, 0.0, l.x ) );",
-    "  return max( H, V ); }",
+    "  return max( lane( c.y, c.x - 0.4 + 0.8 * perim( l.x, l.y, m ) ), lane( 1000.0 + c.x, c.y - 0.4 + 0.8 * perim( l.y, l.x, m ) ) ); }",
     // a spot's light level, and a brightness multiplier on top (uNetB: the network's resting level and brightness)
     "float netLevel( vec2 p ) {",
     "#if NET_MODE == 1",
@@ -403,7 +400,7 @@ async function start(box) {
     "  return 0.8 * flev( max( a.r, b.r ) + 0.6 );",
     "#elif NET_MODE == 3",
     "  float m = uNet.w / uNet.z, X = ( hz ? A.x : A.y ) + 0.4 + 0.2 * clamp( ( s - m ) / ( 1.0 - 2.0 * m ), 0.0, 1.0 );",
-    "  float t = hz ? max( lane( A.y * 2.0, X ), lane( A.y * 2.0 + 1.0, X ) ) : max( lane( 1000.0 + A.x * 2.0, X ), lane( 1000.0 + A.x * 2.0 + 1.0, X ) );",
+    "  float t = hz ? lane( A.y, X ) : lane( 1000.0 + A.x, X );",
     "  gain = mix( uNetB.y, 1.3, clamp( t, 0.0, 1.0 ) );",
     "  return clamp( uNetB.x + t, 0.0, 1.0 );",
     "#elif NET_MODE == 4",
@@ -425,7 +422,7 @@ async function start(box) {
   const withGlow = (sh, local) => {
     Object.assign(sh.uniforms, WAVE);
     sh.vertexShader = "attribute float aGlow, aPres;\nvarying float vGlow, vPres, vWX, vWZ, vSeed;\n" + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
-      sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\ntransformed *= mix( 0.9, 1.0, aPres );\nvGlow = aGlow; vPres = aPres;\n" +
+      sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\nvGlow = aGlow; vPres = aPres;\n" +
         "vec4 wP = modelMatrix * instanceMatrix * vec4( position, 1.0 ); vWX = wP.x; vWZ = wP.z; vSeed = float( gl_InstanceID ) * 3.7 + 11.0;" + (local ? "\nvLocal = position; vLocalN = normal;" : ""));
     sh.fragmentShader = "varying float vGlow, vPres, vWX, vWZ, vSeed;\n" + WAVE_GLSL + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
       sh.fragmentShader.replace("vec3 viewDir = normalize( vViewPosition );", ORTHO)
