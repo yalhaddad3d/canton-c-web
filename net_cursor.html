@@ -67,12 +67,12 @@ const CFG = {
   // how the wall is lit: `mode: "cursor"`: the network rests dimly lit (`rest`: its light level, 0..1;
   // `restBrightness`: how bright, 1 = full) and lights up around the cursor wherever it hovers over the wall, reaching
   // `reach` blocks out link by link (so the lit patch is diamond-shaped); the light glides after the cursor (`follow`:
-  // seconds it takes to catch up); the patches it leaves behind stay lit for `hold` seconds, then fade out over `fade`
-  // seconds. A click or tap sends
+  // seconds it takes to catch up); everywhere it passes stays lit for `hold` seconds, then fades out over `fade`
+  // seconds (move fast enough and you can light the whole wall). A click or tap sends
   // a ripple out from there (`speed` blocks per second, `width` blocks wide, fading over about `life` seconds); with no
   // pointing for 3 seconds (phones, or the cursor elsewhere), a ripple from a random block about every `idle` seconds
   // (0 = never). (the `wave` settings below aren't used in this version)
-  net: { mode: "cursor", rest: 0.12, restBrightness: 0.45, reach: 2.2, follow: 0.05, hold: 1.5, fade: 1.2, speed: 6, width: 0.9, life: 2.2, idle: 4 },
+  net: { mode: "cursor", rest: 0.12, restBrightness: 0.45, reach: 2.2, follow: 0.05, hold: 2, fade: 1.2, speed: 6, width: 0.9, life: 2.2, idle: 4 },
   lines: null,
   // the connectors between neighbouring blocks on the grid wall (across each gap, tube to tube), lit by the same waves
   // and exactly with the tubes (fading up, staying lit and going out with them, flickering with them), so the wall reads
@@ -267,7 +267,7 @@ async function start(box) {
     // timing (uNetA, uNetB), the wider wall's cells (uFld2), the signal's arrival times (uNetTex) and the ripples' sources
     uNet: { value: new THREE.Vector4(0, 0, 1, 1) }, uNetA: { value: new THREE.Vector4() }, uNetB: { value: new THREE.Vector4() }, uNetC: { value: new THREE.Vector4() },
     uFld2: { value: new THREE.Vector4(0, 0, 1, 1) }, uNetTex: { value: null },
-    uSrc: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uTrail: { value: Array.from({ length: 32 }, () => new THREE.Vector4()) } };
+    uSrc: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uCurTex: { value: null }, uCurO: { value: new THREE.Vector4(0, 0, 1, 1) } };
   const NETM = { sweep: 0, spread: 1, ripples: 2, traffic: 3, heartbeat: 4, cursor: 5 }[(CFG.net && CFG.net.mode) || "sweep"] || 0;
   const WAVE_GLSL = [
     "#define NET_MODE " + NETM,
@@ -329,20 +329,11 @@ async function start(box) {
     // ripples: rings travelling out link by link (diamond-shaped) from each source (uSrc: x, z, when it fired, strength;
     // uNetA: time, speed in blocks per second, ring width in blocks, how quickly a ring fades)
     // cursor: the network lights up around where the cursor hovers (spreading out link by link, so the lit patch is
-    // diamond-shaped); the patches it leaves behind stay lit for a moment, then fade away (uTrail: x, z, when,
-    // strength, the newest first; uNetC: how long a patch takes to fade, its reach in blocks, how long it stays lit)
-    "uniform vec4 uTrail[ 32 ];",
-    // (the trail is drawn as one continuous path through the spots, not as separate patches, so it's smooth however fast
-    // the cursor moves; its last stretch fades out so the end never cuts off)
-    "float curs( vec2 p ) { float s = 0.0, life = uNetC.z + uNetC.x;",
-    "  for ( int i = 0; i < 31; i ++ ) { vec4 A = uTrail[ i ], B = uTrail[ i + 1 ]; if ( A.w <= 0.0 ) break;",
-    "    if ( uNetA.x - A.z > life ) break;",
-    "    if ( B.w <= 0.0 ) B = A;",
-    "    vec2 ab = B.xy - A.xy; float h = clamp( dot( p - A.xy, ab ) / max( dot( ab, ab ), 1e-6 ), 0.0, 1.0 );",
-    "    vec2 d = abs( p - A.xy - h * ab ) / uNet.z; float dist = d.x + d.y;",
-    "    float age = max( uNetA.x - mix( A.z, B.z, h ), 0.0 ), w = mix( A.w, B.w, h ) * ( 1.0 - smoothstep( 27.0, 31.0, float( i ) + h ) );",
-    "    s = max( s, w * ( 1.0 - smoothstep( uNetC.z, life, age ) ) * ( 1.0 - smoothstep( 0.2 * uNetC.y, uNetC.y, dist ) ) ); }",
-    "  return s; }",
+    // diamond-shaped), and everywhere it has passed stays lit for a moment, then fades away. The script keeps that light
+    // as a smooth map over the whole wall (uCurTex, placed by uCurO: its corner x, z and size), so however fast and far
+    // the cursor goes, all of its path stays lit
+    "uniform sampler2D uCurTex;\nuniform vec4 uCurO;",
+    "float curs( vec2 p ) { return texture2D( uCurTex, ( p - uCurO.xy ) / uCurO.zw ).r; }",
     "float rip( vec2 p, float delay ) { float s = 0.0;",
     "  for ( int i = 0; i < 4; i ++ ) { vec4 S = uSrc[ i ]; float age = uNetA.x - S.z - delay; if ( age < 0.0 || S.w <= 0.0 ) continue;",
     "    vec2 d = abs( p - S.xy ) / uNet.z; float x = ( d.x + d.y - uNetA.y * age ) / uNetA.z;",
@@ -860,6 +851,7 @@ async function start(box) {
       const onScreen = (k) => { const [x, z] = cellXZ(k); return Math.abs(x - camera.position.x) < camera.right && Math.abs(z - camera.position.z) < camera.top; };
       function netField() {
         WAVE.uFld2.value.set(field.fc0, field.fr0, FCn(), FRn());
+        if (NETM === 5) cursorField();
         if (NETM !== 1) return;
         if (netTex) netTex.dispose();
         netTex = new THREE.DataTexture(new Float32Array(FCn() * FRn() * 4).fill(1e4), FCn(), FRn(), THREE.RGBAFormat, THREE.FloatType);
@@ -903,33 +895,59 @@ async function start(box) {
         flood = { start: clock, off, len: off + (NT.fadeOut || 1) + (NT.holdOff || 0) };
       }
 
-      // cursor: where the pointer is over the wall (in the world), eased so the light glides after it; a trail of the
-      // spots it passed (newest first), each fading; a click (or tap) sends a ripple out from there; and when nobody's
-      // pointing for a while (phones, or the cursor elsewhere), the odd ripple from a random block keeps it alive
-      const ptr = { on: false, u: 0.5, v: 0.5, x: 0, z: 0, set: false, lastMove: -1e9, lastT: -1e9, lx: 0, lz: 0, nextIdle: 0, rip: 0, clicks: [] };
+      // cursor: where the pointer is over the wall (in the world), eased so the light glides after it; everywhere it
+      // passes is lit (a light map over the whole wider wall, 4 points per block, smoothed between them) and stays lit
+      // for `hold`, then fades over `fade`; a click (or tap) sends a ripple out from there; and when nobody's pointing for
+      // a while (phones, or the cursor elsewhere), the odd ripple from a random block keeps it alive
+      const ptr = { on: false, u: 0.5, v: 0.5, x: 0, z: 0, px: 0, pz: 0, set: false, lastMove: -1e9, nextIdle: 0, rip: 0, clicks: [] };
       if (NETM === 5) {
         const at = (e) => { const r = box.getBoundingClientRect(); ptr.u = (e.clientX - r.left) / r.width; ptr.v = (e.clientY - r.top) / r.height; };
         box.addEventListener("pointermove", (e) => { at(e); ptr.on = true; ptr.lastMove = clock; });
         box.addEventListener("pointerleave", () => { ptr.on = false; });
         box.addEventListener("pointerdown", (e) => { at(e); ptr.lastMove = clock; ptr.clicks.push([ptr.u, ptr.v]); });
       }
+      const RES = 4;
+      const cmap = { tex: null, W: 0, H: 0, ox: 0, oz: 0, peak: null, when: null };
+      function cursorField() {
+        const W = FCn() * RES, H = FRn() * RES;
+        if (cmap.tex) cmap.tex.dispose();
+        cmap.tex = new THREE.DataTexture(new Uint8Array(W * H * 4), W, H, THREE.RGBAFormat);
+        cmap.tex.magFilter = cmap.tex.minFilter = THREE.LinearFilter; cmap.tex.generateMipmaps = false; cmap.tex.needsUpdate = true;
+        Object.assign(cmap, { W, H, ox: xF + (field.fc0 - 0.5) * pitch, oz: z0 + (field.fr0 - 0.5) * pitch,
+          peak: new Float32Array(W * H), when: new Float32Array(W * H).fill(-1e9) });
+        WAVE.uCurTex.value = cmap.tex;
+        WAVE.uCurO.value.set(cmap.ox, cmap.oz, FCn() * pitch, FRn() * pitch);
+      }
       const toWorld = (u, v) => [camera.position.x + (2 * u - 1) * camera.right, camera.position.z + (2 * v - 1) * camera.top];
       function cursorUpdate(t) {
-        const tr = WAVE.uTrail.value, dt = Math.min(Math.max(t - (ptr.prevT ?? t), 0), 0.1);
+        if (!cmap.tex) cursorField();
+        const dt = Math.min(Math.max(t - (ptr.prevT ?? t), 0), 0.1);
         ptr.prevT = t;
         const [tx, tz] = toWorld(ptr.u, ptr.v);
-        if (!ptr.set) { ptr.x = tx; ptr.z = tz; ptr.set = true; }
-        const k = 1 - Math.exp(-dt / (NT.follow || 0.08));
+        if (!ptr.set) { ptr.x = ptr.px = tx; ptr.z = ptr.pz = tz; ptr.set = true; }
+        const k = 1 - Math.exp(-dt / (NT.follow || 0.05));
+        ptr.px = ptr.x; ptr.pz = ptr.z;
         ptr.x += (tx - ptr.x) * k; ptr.z += (tz - ptr.z) * k;
+        const hold = NT.hold || 0, fade = Math.max(NT.fade || 1.2, 0.01), reach = NT.reach || 2.2, step = pitch / RES;
+        const life = (age) => 1 - smoothstep((Math.max(age, 0) - hold) / fade);
         if (ptr.on) {
-          // the live spot, and a new trail spot every so often as it moves
-          if (Math.hypot(ptr.x - ptr.lx, ptr.z - ptr.lz) > 0.5 * pitch || t - ptr.lastT > 0.25) {
-            for (let i = tr.length - 1; i > 1; i--) tr[i].copy(tr[i - 1]);
-            tr[1].set(ptr.x, ptr.z, t, 1);
-            ptr.lx = ptr.x; ptr.lz = ptr.z; ptr.lastT = t;
+          // light everything along the way from where it was last frame to where it is now
+          const ax = ptr.px, az = ptr.pz, bx = ptr.x, bz = ptr.z, abx = bx - ax, abz = bz - az, ll = abx * abx + abz * abz;
+          const R = reach * pitch;
+          const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - R - cmap.ox) / step)), i1 = Math.min(cmap.W - 1, Math.ceil((Math.max(ax, bx) + R - cmap.ox) / step));
+          const j0 = Math.max(0, Math.floor((Math.min(az, bz) - R - cmap.oz) / step)), j1 = Math.min(cmap.H - 1, Math.ceil((Math.max(az, bz) + R - cmap.oz) / step));
+          for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+            const x = cmap.ox + (i + 0.5) * step, z = cmap.oz + (j + 0.5) * step;
+            const h = ll > 0 ? Math.min(1, Math.max(0, ((x - ax) * abx + (z - az) * abz) / ll)) : 0;
+            const d = (Math.abs(x - ax - h * abx) + Math.abs(z - az - h * abz)) / pitch;
+            const f = 1 - smoothstep((d - 0.2 * reach) / (0.8 * reach));
+            const q = j * cmap.W + i;
+            if (f > 0 && f >= cmap.peak[q] * life(t - cmap.when[q])) { cmap.peak[q] = f; cmap.when[q] = t; }
           }
-          tr[0].set(ptr.x, ptr.z, t, 1);
         }
+        const out = cmap.tex.image.data;
+        for (let q = 0; q < cmap.peak.length; q++) out[q * 4] = Math.round(255 * cmap.peak[q] * life(t - cmap.when[q]));
+        cmap.tex.needsUpdate = true;
         // clicks and taps: a ripple each
         for (const [u, v] of ptr.clicks.splice(0)) { const [x, z] = toWorld(u, v); WAVE.uSrc.value[ptr.rip++ % 4].set(x, z, t, 1); }
         // nobody pointing for a while: now and then a ripple from a random block on screen
@@ -940,7 +958,6 @@ async function start(box) {
           ptr.nextIdle = t + NT.idle * (0.7 + 0.6 * Math.random());
         }
         WAVE.uNetA.value.set(t, NT.speed || 6, NT.width || 0.9, NT.life || 2.2);
-        WAVE.uNetC.value.set(NT.fade || 1.2, NT.reach || 2.2, NT.hold || 0, 0);
       }
       const rips = [0, 1, 2, 3].map((i) => ({ next: i * (NT.every || 3) / 4 }));
       function netUpdate() {
