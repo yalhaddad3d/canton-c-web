@@ -67,11 +67,12 @@ const CFG = {
   // how the wall is lit: `mode: "cursor"`: the network rests dimly lit (`rest`: its light level, 0..1;
   // `restBrightness`: how bright, 1 = full) and lights up around the cursor wherever it hovers over the wall, reaching
   // `reach` blocks out link by link (so the lit patch is diamond-shaped); the light glides after the cursor (`follow`:
-  // seconds it takes to catch up) and the patches it leaves behind fade over about `fade` seconds. A click or tap sends
+  // seconds it takes to catch up); the patches it leaves behind stay lit for `hold` seconds, then fade out over `fade`
+  // seconds. A click or tap sends
   // a ripple out from there (`speed` blocks per second, `width` blocks wide, fading over about `life` seconds); with no
   // pointing for 3 seconds (phones, or the cursor elsewhere), a ripple from a random block about every `idle` seconds
   // (0 = never). (the `wave` settings below aren't used in this version)
-  net: { mode: "cursor", rest: 0.12, restBrightness: 0.45, reach: 2.2, follow: 0.08, fade: 0.8, speed: 6, width: 0.9, life: 2.2, idle: 4 },
+  net: { mode: "cursor", rest: 0.12, restBrightness: 0.45, reach: 2.2, follow: 0.05, hold: 1.5, fade: 1.2, speed: 6, width: 0.9, life: 2.2, idle: 4 },
   lines: null,
   // the connectors between neighbouring blocks on the grid wall (across each gap, tube to tube), lit by the same waves
   // and exactly with the tubes (fading up, staying lit and going out with them, flickering with them), so the wall reads
@@ -266,7 +267,7 @@ async function start(box) {
     // timing (uNetA, uNetB), the wider wall's cells (uFld2), the signal's arrival times (uNetTex) and the ripples' sources
     uNet: { value: new THREE.Vector4(0, 0, 1, 1) }, uNetA: { value: new THREE.Vector4() }, uNetB: { value: new THREE.Vector4() }, uNetC: { value: new THREE.Vector4() },
     uFld2: { value: new THREE.Vector4(0, 0, 1, 1) }, uNetTex: { value: null },
-    uSrc: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uTrail: { value: Array.from({ length: 12 }, () => new THREE.Vector4()) } };
+    uSrc: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uTrail: { value: Array.from({ length: 32 }, () => new THREE.Vector4()) } };
   const NETM = { sweep: 0, spread: 1, ripples: 2, traffic: 3, heartbeat: 4, cursor: 5 }[(CFG.net && CFG.net.mode) || "sweep"] || 0;
   const WAVE_GLSL = [
     "#define NET_MODE " + NETM,
@@ -328,13 +329,19 @@ async function start(box) {
     // ripples: rings travelling out link by link (diamond-shaped) from each source (uSrc: x, z, when it fired, strength;
     // uNetA: time, speed in blocks per second, ring width in blocks, how quickly a ring fades)
     // cursor: the network lights up around where the cursor hovers (spreading out link by link, so the lit patch is
-    // diamond-shaped), and the patches it leaves behind fade away (uTrail: x, z, when, strength, the newest first;
-    // uNetC: how long a patch takes to fade, its reach in blocks)
-    "uniform vec4 uTrail[ 12 ];",
-    "float curs( vec2 p ) { float s = 0.0;",
-    "  for ( int i = 0; i < 12; i ++ ) { vec4 T = uTrail[ i ]; if ( T.w <= 0.0 ) continue;",
-    "    vec2 d = abs( p - T.xy ) / uNet.z; float dist = d.x + d.y, age = max( uNetA.x - T.z, 0.0 );",
-    "    s = max( s, T.w * exp( - age / uNetC.x ) * ( 1.0 - smoothstep( 0.2 * uNetC.y, uNetC.y, dist ) ) ); }",
+    // diamond-shaped); the patches it leaves behind stay lit for a moment, then fade away (uTrail: x, z, when,
+    // strength, the newest first; uNetC: how long a patch takes to fade, its reach in blocks, how long it stays lit)
+    "uniform vec4 uTrail[ 32 ];",
+    // (the trail is drawn as one continuous path through the spots, not as separate patches, so it's smooth however fast
+    // the cursor moves; its last stretch fades out so the end never cuts off)
+    "float curs( vec2 p ) { float s = 0.0, life = uNetC.z + uNetC.x;",
+    "  for ( int i = 0; i < 31; i ++ ) { vec4 A = uTrail[ i ], B = uTrail[ i + 1 ]; if ( A.w <= 0.0 ) break;",
+    "    if ( uNetA.x - A.z > life ) break;",
+    "    if ( B.w <= 0.0 ) B = A;",
+    "    vec2 ab = B.xy - A.xy; float h = clamp( dot( p - A.xy, ab ) / max( dot( ab, ab ), 1e-6 ), 0.0, 1.0 );",
+    "    vec2 d = abs( p - A.xy - h * ab ) / uNet.z; float dist = d.x + d.y;",
+    "    float age = max( uNetA.x - mix( A.z, B.z, h ), 0.0 ), w = mix( A.w, B.w, h ) * ( 1.0 - smoothstep( 27.0, 31.0, float( i ) + h ) );",
+    "    s = max( s, w * ( 1.0 - smoothstep( uNetC.z, life, age ) ) * ( 1.0 - smoothstep( 0.2 * uNetC.y, uNetC.y, dist ) ) ); }",
     "  return s; }",
     "float rip( vec2 p, float delay ) { float s = 0.0;",
     "  for ( int i = 0; i < 4; i ++ ) { vec4 S = uSrc[ i ]; float age = uNetA.x - S.z - delay; if ( age < 0.0 || S.w <= 0.0 ) continue;",
@@ -916,7 +923,7 @@ async function start(box) {
         ptr.x += (tx - ptr.x) * k; ptr.z += (tz - ptr.z) * k;
         if (ptr.on) {
           // the live spot, and a new trail spot every so often as it moves
-          if (Math.hypot(ptr.x - ptr.lx, ptr.z - ptr.lz) > 0.35 * pitch || t - ptr.lastT > 0.15) {
+          if (Math.hypot(ptr.x - ptr.lx, ptr.z - ptr.lz) > 0.5 * pitch || t - ptr.lastT > 0.25) {
             for (let i = tr.length - 1; i > 1; i--) tr[i].copy(tr[i - 1]);
             tr[1].set(ptr.x, ptr.z, t, 1);
             ptr.lx = ptr.x; ptr.lz = ptr.z; ptr.lastT = t;
@@ -933,7 +940,7 @@ async function start(box) {
           ptr.nextIdle = t + NT.idle * (0.7 + 0.6 * Math.random());
         }
         WAVE.uNetA.value.set(t, NT.speed || 6, NT.width || 0.9, NT.life || 2.2);
-        WAVE.uNetC.value.set(NT.fade || 0.8, NT.reach || 2.2, 0, 0);
+        WAVE.uNetC.value.set(NT.fade || 1.2, NT.reach || 2.2, NT.hold || 0, 0);
       }
       const rips = [0, 1, 2, 3].map((i) => ({ next: i * (NT.every || 3) / 4 }));
       function netUpdate() {
@@ -1013,6 +1020,8 @@ async function start(box) {
             "  float d = hz ? dH : dV;",
             "  float p = hz ? min( cell( c, r ), cell( c + 1.0, r ) ) : min( cell( c2, q ), cell( c2, q + 1.0 ) );",
             "  if ( p < 0.002 ) discard;",
+            // (nothing to draw this far from a connector, even at its brightest: skip working out its light)
+            "  if ( d > 7.0 * uCon.w * uPx + uPx ) discard;",
             "  float ng = 1.0;",
             "#if NET_MODE == 0",
             "  float wv = wd( wp.x, wp.y ), g = clv( wv ), b = uWave3.y >= 0.0 ? 0.0 : wband( wv ) * uCw2.x;",
