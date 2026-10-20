@@ -696,7 +696,10 @@ async function start(box) {
     return { x, z, hh, l, r };
   }
   // zp: how far the camera has pulled back (0..1, eased)
-  const zoomBy = (zp) => 1 + (Math.max((CFG.zoomOut && CFG.zoomOut.amount) || 1, 1) - 1) * zp;
+  // (rowFit, worked out with the wider wall: the pull back adjusted a touch so the screen's top and bottom edges fall in
+  // the gaps between rows, every row on screen whole: `A` how far it pulls back, `dz` how far it moves up / down)
+  let rowFit = null;
+  const zoomBy = (zp) => 1 + ((rowFit ? rowFit.A : Math.max((CFG.zoomOut && CFG.zoomOut.amount) || 1, 1)) - 1) * zp;
   let maskNow = "";
   function frame(fs, w, g, zp) {
     const v = view(fs, w, g);
@@ -713,7 +716,8 @@ async function start(box) {
     if (mask !== maskNow) { maskNow = mask; canvas.style.webkitMaskImage = canvas.style.maskImage = mask; }
     const hh = v.hh * zoomBy(zp);
     Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
-    camera.position.set(v.x, top, v.z); camera.lookAt(v.x, top - 1, v.z);
+    const vz = v.z + (rowFit ? rowFit.dz * zp : 0);
+    camera.position.set(v.x, top, vz); camera.lookAt(v.x, top - 1, vz);
     camera.updateProjectionMatrix();
   }
 
@@ -793,9 +797,21 @@ async function start(box) {
       const field = { fc0: 0, fc1: -1, fr0: 0, fr1: -1, n: C.n, dist: [], inst: null };
       let full = true;
       function setField() {
-        const v = view(PS, 1, 1), A = zoomBy(1), hh = v.hh * A + pitch, hw = v.hh * aspect * A + pitch;
+        const v = view(PS, 1, 1), A0 = Math.max((CFG.zoomOut && CFG.zoomOut.amount) || 1, 1);
+        // fit the pulled-back view to whole rows: N rows exactly fill the screen's height, its top and bottom edges in
+        // the gaps between rows (the nearest fit to the pull back asked for), and no row is cut
+        rowFit = null;
+        let vz = v.z, kTop = 0, N = NR;
+        if (A0 > 1) {
+          N = Math.max(NR, Math.round(2 * v.hh * A0 / pitch));
+          const H = N * pitch / 2;
+          kTop = Math.min(0, Math.max(NR - N, Math.round((v.z - H - z0) / pitch + 0.5)));
+          vz = z0 + (kTop - 0.5) * pitch + H;
+          rowFit = { A: H / v.hh, dz: vz - v.z };
+        }
+        const A = zoomBy(1), hw = v.hh * aspect * A + pitch;
         let fc0 = Math.min(Math.floor((v.x - hw - xF) / pitch), c0), fc1 = Math.max(Math.ceil((v.x + hw - xF) / pitch), c1);
-        let fr0 = Math.min(Math.floor((v.z - hh - z0) / pitch), 0), fr1 = Math.max(Math.ceil((v.z + hh - z0) / pitch), NR - 1);
+        let fr0 = kTop, fr1 = kTop + N - 1;
         if (A <= 1) { fc0 = c0; fc1 = c1; fr0 = 0; fr1 = NR - 1; }
         // (very unusual screen shapes: keep within the room there is, trimming the far sides)
         while ((fc1 - fc0 + 1) * (fr1 - fr0 + 1) > NMAX) {
@@ -804,7 +820,7 @@ async function start(box) {
         // how far out the pulled-back camera sees past the wall (from its outer squares' middles), across and up / down
         const xa = xF + c0 * pitch, xb = xF + c1 * pitch, za = z0, zb = z0 + (NR - 1) * pitch;
         const Dx = Math.max(v.x + v.hh * aspect * A - xb, xa - (v.x - v.hh * aspect * A), pitch);
-        const Dz = Math.max(v.z + v.hh * A - zb, za - (v.z - v.hh * A), pitch);
+        const Dz = Math.max(vz + v.hh * A - zb, za - (vz - v.hh * A), pitch);
         let n = C.n;
         field.dist.length = 0;
         // which square sits in each cell (-1: one of the C's own, always there)

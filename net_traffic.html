@@ -265,8 +265,8 @@ async function start(box) {
     // timing (uNetA, uNetB), the wider wall's cells (uFld2), the signal's arrival times (uNetTex) and the ripples' sources
     uNet: { value: new THREE.Vector4(0, 0, 1, 1) }, uNetA: { value: new THREE.Vector4() }, uNetB: { value: new THREE.Vector4() }, uNetC: { value: new THREE.Vector4() },
     uFld2: { value: new THREE.Vector4(0, 0, 1, 1) }, uNetTex: { value: null },
-    uSrc: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) } };
-  const NETM = { sweep: 0, spread: 1, ripples: 2, traffic: 3, heartbeat: 4 }[(CFG.net && CFG.net.mode) || "sweep"] || 0;
+    uSrc: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uCurTex: { value: null }, uCurO: { value: new THREE.Vector4(0, 0, 1, 1) } };
+  const NETM = { sweep: 0, spread: 1, ripples: 2, traffic: 3, heartbeat: 4, cursor: 5 }[(CFG.net && CFG.net.mode) || "sweep"] || 0;
   const WAVE_GLSL = [
     "#define NET_MODE " + NETM,
     "uniform vec4 uWave, uWave2, uWave3, uWave4, uWave5, uBand, uBand2;",
@@ -326,6 +326,12 @@ async function start(box) {
     "float flev( float a ) { return smoothstep( a, a + uNetA.y, uNetA.x ) * ( 1.0 - smoothstep( uNetA.z, uNetA.z + uNetA.w, uNetA.x ) ); }",
     // ripples: rings travelling out link by link (diamond-shaped) from each source (uSrc: x, z, when it fired, strength;
     // uNetA: time, speed in blocks per second, ring width in blocks, how quickly a ring fades)
+    // cursor: the network lights up around where the cursor hovers (spreading out link by link, so the lit patch is
+    // diamond-shaped), and everywhere it has passed stays lit for a moment, then fades away. The script keeps that light
+    // as a smooth map over the whole wall (uCurTex, placed by uCurO: its corner x, z and size), so however fast and far
+    // the cursor goes, all of its path stays lit
+    "uniform sampler2D uCurTex;\nuniform vec4 uCurO;",
+    "float curs( vec2 p ) { return texture2D( uCurTex, ( p - uCurO.xy ) / uCurO.zw ).r; }",
     "float rip( vec2 p, float delay ) { float s = 0.0;",
     "  for ( int i = 0; i < 4; i ++ ) { vec4 S = uSrc[ i ]; float age = uNetA.x - S.z - delay; if ( age < 0.0 || S.w <= 0.0 ) continue;",
     "    vec2 d = abs( p - S.xy ) / uNet.z; float x = ( d.x + d.y - uNetA.y * age ) / uNetA.z;",
@@ -368,6 +374,8 @@ async function start(box) {
     "  return clamp( uNetB.x + traf( p ), 0.0, 1.0 );",
     "#elif NET_MODE == 4",
     "  return clamp( uNetB.x + ( 1.0 - uNetB.x ) * heart( p, 0.0 ), 0.0, 1.0 );",
+    "#elif NET_MODE == 5",
+    "  return clamp( uNetB.x + max( curs( p ), rip( p, 0.0 ) ), 0.0, 1.0 );",
     "#else",
     "  return wlev( wd( p.x, p.y ) );",
     "#endif",
@@ -382,6 +390,8 @@ async function start(box) {
     "  return mix( uNetB.y, 1.3, clamp( traf( p ), 0.0, 1.0 ) );",
     "#elif NET_MODE == 4",
     "  return mix( uNetB.y, 1.2, clamp( heart( p, 0.0 ), 0.0, 1.0 ) );",
+    "#elif NET_MODE == 5",
+    "  return mix( uNetB.y, 1.25, clamp( max( curs( p ), rip( p, 0.0 ) ), 0.0, 1.0 ) );",
     "#else",
     "  return 1.0;",
     "#endif",
@@ -684,7 +694,10 @@ async function start(box) {
     return { x, z, hh, l, r };
   }
   // zp: how far the camera has pulled back (0..1, eased)
-  const zoomBy = (zp) => 1 + (Math.max((CFG.zoomOut && CFG.zoomOut.amount) || 1, 1) - 1) * zp;
+  // (rowFit, worked out with the wider wall: the pull back adjusted a touch so the screen's top and bottom edges fall in
+  // the gaps between rows, every row on screen whole: `A` how far it pulls back, `dz` how far it moves up / down)
+  let rowFit = null;
+  const zoomBy = (zp) => 1 + ((rowFit ? rowFit.A : Math.max((CFG.zoomOut && CFG.zoomOut.amount) || 1, 1)) - 1) * zp;
   let maskNow = "";
   function frame(fs, w, g, zp) {
     const v = view(fs, w, g);
@@ -701,7 +714,8 @@ async function start(box) {
     if (mask !== maskNow) { maskNow = mask; canvas.style.webkitMaskImage = canvas.style.maskImage = mask; }
     const hh = v.hh * zoomBy(zp);
     Object.assign(camera, { top: hh, bottom: -hh, left: -hh * aspect, right: hh * aspect });
-    camera.position.set(v.x, top, v.z); camera.lookAt(v.x, top - 1, v.z);
+    const vz = v.z + (rowFit ? rowFit.dz * zp : 0);
+    camera.position.set(v.x, top, vz); camera.lookAt(v.x, top - 1, vz);
     camera.updateProjectionMatrix();
   }
 
@@ -781,9 +795,21 @@ async function start(box) {
       const field = { fc0: 0, fc1: -1, fr0: 0, fr1: -1, n: C.n, dist: [], inst: null };
       let full = true;
       function setField() {
-        const v = view(PS, 1, 1), A = zoomBy(1), hh = v.hh * A + pitch, hw = v.hh * aspect * A + pitch;
+        const v = view(PS, 1, 1), A0 = Math.max((CFG.zoomOut && CFG.zoomOut.amount) || 1, 1);
+        // fit the pulled-back view to whole rows: N rows exactly fill the screen's height, its top and bottom edges in
+        // the gaps between rows (the nearest fit to the pull back asked for), and no row is cut
+        rowFit = null;
+        let vz = v.z, kTop = 0, N = NR;
+        if (A0 > 1) {
+          N = Math.max(NR, Math.round(2 * v.hh * A0 / pitch));
+          const H = N * pitch / 2;
+          kTop = Math.min(0, Math.max(NR - N, Math.round((v.z - H - z0) / pitch + 0.5)));
+          vz = z0 + (kTop - 0.5) * pitch + H;
+          rowFit = { A: H / v.hh, dz: vz - v.z };
+        }
+        const A = zoomBy(1), hw = v.hh * aspect * A + pitch;
         let fc0 = Math.min(Math.floor((v.x - hw - xF) / pitch), c0), fc1 = Math.max(Math.ceil((v.x + hw - xF) / pitch), c1);
-        let fr0 = Math.min(Math.floor((v.z - hh - z0) / pitch), 0), fr1 = Math.max(Math.ceil((v.z + hh - z0) / pitch), NR - 1);
+        let fr0 = kTop, fr1 = kTop + N - 1;
         if (A <= 1) { fc0 = c0; fc1 = c1; fr0 = 0; fr1 = NR - 1; }
         // (very unusual screen shapes: keep within the room there is, trimming the far sides)
         while ((fc1 - fc0 + 1) * (fr1 - fr0 + 1) > NMAX) {
@@ -792,7 +818,7 @@ async function start(box) {
         // how far out the pulled-back camera sees past the wall (from its outer squares' middles), across and up / down
         const xa = xF + c0 * pitch, xb = xF + c1 * pitch, za = z0, zb = z0 + (NR - 1) * pitch;
         const Dx = Math.max(v.x + v.hh * aspect * A - xb, xa - (v.x - v.hh * aspect * A), pitch);
-        const Dz = Math.max(v.z + v.hh * A - zb, za - (v.z - v.hh * A), pitch);
+        const Dz = Math.max(vz + v.hh * A - zb, za - (vz - v.hh * A), pitch);
         let n = C.n;
         field.dist.length = 0;
         // which square sits in each cell (-1: one of the C's own, always there)
@@ -839,6 +865,7 @@ async function start(box) {
       const onScreen = (k) => { const [x, z] = cellXZ(k); return Math.abs(x - camera.position.x) < camera.right && Math.abs(z - camera.position.z) < camera.top; };
       function netField() {
         WAVE.uFld2.value.set(field.fc0, field.fr0, FCn(), FRn());
+        if (NETM === 5) cursorField();
         if (NETM !== 1) return;
         if (netTex) netTex.dispose();
         netTex = new THREE.DataTexture(new Float32Array(FCn() * FRn() * 4).fill(1e4), FCn(), FRn(), THREE.RGBAFormat, THREE.FloatType);
@@ -881,6 +908,71 @@ async function start(box) {
         const ramp = NT.ramp || 0.5, off = tAll + ramp + (NT.holdOn || 0);
         flood = { start: clock, off, len: off + (NT.fadeOut || 1) + (NT.holdOff || 0) };
       }
+
+      // cursor: where the pointer is over the wall (in the world), eased so the light glides after it; everywhere it
+      // passes is lit (a light map over the whole wider wall, 4 points per block, smoothed between them) and stays lit
+      // for `hold`, then fades over `fade`; a click (or tap) sends a ripple out from there; and when nobody's pointing for
+      // a while (phones, or the cursor elsewhere), the odd ripple from a random block keeps it alive
+      const ptr = { on: false, u: 0.5, v: 0.5, x: 0, z: 0, px: 0, pz: 0, set: false, lastMove: -1e9, nextIdle: 0, rip: 0, clicks: [] };
+      if (NETM === 5) {
+        const at = (e) => { const r = box.getBoundingClientRect(); ptr.u = (e.clientX - r.left) / r.width; ptr.v = (e.clientY - r.top) / r.height; };
+        box.addEventListener("pointermove", (e) => { at(e); ptr.on = true; ptr.lastMove = clock; });
+        box.addEventListener("pointerleave", () => { ptr.on = false; });
+        box.addEventListener("pointerdown", (e) => { at(e); ptr.lastMove = clock; ptr.clicks.push([ptr.u, ptr.v]); });
+      }
+      const RES = 4;
+      const cmap = { tex: null, W: 0, H: 0, ox: 0, oz: 0, peak: null, when: null };
+      function cursorField() {
+        const W = FCn() * RES, H = FRn() * RES;
+        if (cmap.tex) cmap.tex.dispose();
+        cmap.tex = new THREE.DataTexture(new Uint8Array(W * H * 4), W, H, THREE.RGBAFormat);
+        cmap.tex.magFilter = cmap.tex.minFilter = THREE.LinearFilter; cmap.tex.generateMipmaps = false; cmap.tex.needsUpdate = true;
+        Object.assign(cmap, { W, H, ox: xF + (field.fc0 - 0.5) * pitch, oz: z0 + (field.fr0 - 0.5) * pitch,
+          peak: new Float32Array(W * H), when: new Float32Array(W * H).fill(-1e9) });
+        WAVE.uCurTex.value = cmap.tex;
+        WAVE.uCurO.value.set(cmap.ox, cmap.oz, FCn() * pitch, FRn() * pitch);
+      }
+      const toWorld = (u, v) => [camera.position.x + (2 * u - 1) * camera.right, camera.position.z + (2 * v - 1) * camera.top];
+      function cursorUpdate(t) {
+        if (!cmap.tex) cursorField();
+        const dt = Math.min(Math.max(t - (ptr.prevT ?? t), 0), 0.1);
+        ptr.prevT = t;
+        const [tx, tz] = toWorld(ptr.u, ptr.v);
+        if (!ptr.set) { ptr.x = ptr.px = tx; ptr.z = ptr.pz = tz; ptr.set = true; }
+        const k = 1 - Math.exp(-dt / (NT.follow || 0.05));
+        ptr.px = ptr.x; ptr.pz = ptr.z;
+        ptr.x += (tx - ptr.x) * k; ptr.z += (tz - ptr.z) * k;
+        const hold = NT.hold || 0, fade = Math.max(NT.fade || 1.2, 0.01), reach = NT.reach || 2.2, step = pitch / RES;
+        const life = (age) => 1 - smoothstep((Math.max(age, 0) - hold) / fade);
+        if (ptr.on) {
+          // light everything along the way from where it was last frame to where it is now
+          const ax = ptr.px, az = ptr.pz, bx = ptr.x, bz = ptr.z, abx = bx - ax, abz = bz - az, ll = abx * abx + abz * abz;
+          const R = reach * pitch;
+          const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - R - cmap.ox) / step)), i1 = Math.min(cmap.W - 1, Math.ceil((Math.max(ax, bx) + R - cmap.ox) / step));
+          const j0 = Math.max(0, Math.floor((Math.min(az, bz) - R - cmap.oz) / step)), j1 = Math.min(cmap.H - 1, Math.ceil((Math.max(az, bz) + R - cmap.oz) / step));
+          for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+            const x = cmap.ox + (i + 0.5) * step, z = cmap.oz + (j + 0.5) * step;
+            const h = ll > 0 ? Math.min(1, Math.max(0, ((x - ax) * abx + (z - az) * abz) / ll)) : 0;
+            const d = (Math.abs(x - ax - h * abx) + Math.abs(z - az - h * abz)) / pitch;
+            const f = 1 - smoothstep((d - 0.2 * reach) / (0.8 * reach));
+            const q = j * cmap.W + i;
+            if (f > 0 && f >= cmap.peak[q] * life(t - cmap.when[q])) { cmap.peak[q] = f; cmap.when[q] = t; }
+          }
+        }
+        const out = cmap.tex.image.data;
+        for (let q = 0; q < cmap.peak.length; q++) out[q * 4] = Math.round(255 * cmap.peak[q] * life(t - cmap.when[q]));
+        cmap.tex.needsUpdate = true;
+        // clicks and taps: a ripple each
+        for (const [u, v] of ptr.clicks.splice(0)) { const [x, z] = toWorld(u, v); WAVE.uSrc.value[ptr.rip++ % 4].set(x, z, t, 1); }
+        // nobody pointing for a while: now and then a ripple from a random block on screen
+        if (NT.idle && t - ptr.lastMove > 3 && t >= ptr.nextIdle) {
+          const cand = [], n = FCn() * FRn();
+          for (let q = 0; q < n; q++) if (present(q) > 0.5 && onScreen(q)) cand.push(q);
+          if (cand.length) { const [x, z] = cellXZ(cand[Math.floor(Math.random() * cand.length)]); WAVE.uSrc.value[ptr.rip++ % 4].set(x, z, t, 0.8); }
+          ptr.nextIdle = t + NT.idle * (0.7 + 0.6 * Math.random());
+        }
+        WAVE.uNetA.value.set(t, NT.speed || 6, NT.width || 0.9, NT.life || 2.2);
+      }
       const rips = [0, 1, 2, 3].map((i) => ({ next: i * (NT.every || 3) / 4 }));
       function netUpdate() {
         const t = clock;
@@ -904,7 +996,7 @@ async function start(box) {
         } else if (NETM === 4) {
           WAVE.uNetA.value.set(t, NT.every || 6, NT.beat || 0.2, NT.fall || 1.4);
           WAVE.uNetC.value.set(NT.hold || 1.6, NT.spread || 0.03, NT.second || 0.42, 0);
-        }
+        } else if (NETM === 5) cursorUpdate(t);
         WAVE.uNetB.value.set(NT.rest || 0, NT.restBrightness !== undefined ? NT.restBrightness : 1, NT.linkDelay || 0, 0);
       }
 
@@ -959,6 +1051,8 @@ async function start(box) {
             "  float d = hz ? dH : dV;",
             "  float p = hz ? min( cell( c, r ), cell( c + 1.0, r ) ) : min( cell( c2, q ), cell( c2, q + 1.0 ) );",
             "  if ( p < 0.002 ) discard;",
+            // (nothing to draw this far from a connector, even at its brightest: skip working out its light)
+            "  if ( d > 7.0 * uCon.w * uPx + uPx ) discard;",
             "  float ng = 1.0;",
             "#if NET_MODE == 0",
             "  float wv = wd( wp.x, wp.y ), g = clv( wv ), b = uWave3.y >= 0.0 ? 0.0 : wband( wv ) * uCw2.x;",
