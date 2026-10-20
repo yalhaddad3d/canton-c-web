@@ -67,11 +67,11 @@ const CFG = {
   lines: null,
   // the connectors between neighbouring blocks on the grid wall (across each gap, tube to tube), lit by the same waves
   // and exactly with the tubes (fading up, staying lit and going out with them, flickering with them), so the wall reads
-  // as one network. `width`: how thick (1 = as thick as the tubes), shaded like a tube, with a soft
-  // `halo` (strength) `haloWidth` CSS pixels wide; `strength`: how bright (1 = the tubes' yellow); `flicker`: how much they dip while lit (0 = steady), `flickerSpeed`: how
-  // lively; `fadeIn`: over how much of the scroll animation (after the grid has formed) they fade in as you scroll, and
-  // out as you scroll back; `pulse`: how much the band riding the wave (wave.band, below) brightens them (and the tubes) and
-  // widens their halo as it passes (0 = not at all). null = none
+  // as one network. `width`: how thick (1 = as thick as the tubes), shaded like a tube, with a soft `halo` (strength)
+  // `haloWidth` CSS pixels wide; `strength`: how bright (1 = the tubes' yellow); `flicker`: how much they dip while lit
+  // (0 = steady), `flickerSpeed`: how lively; `fadeIn`: over how much of the scroll animation (after the grid has
+  // formed) they fade in as you scroll, and out as you scroll back; `pulse`: how much the band riding the wave
+  // (wave.band, below) brightens them (and the tubes) and widens their halo as it passes (0 = not at all). null = none
   connect: { width: 1.0, halo: 0.3, haloWidth: 4, strength: 1.0, flicker: 0.45, flickerSpeed: 1.0, fadeIn: 0.08, pulse: 1.0 },
   // the tubes on the grid wall: how much they flicker while lit (0 = steady), and how lively. The tubes and the
   // connectors flicker as one network (the same flicker across the wall), so keep these the same as connect's
@@ -253,8 +253,15 @@ async function start(box) {
   // (uWave: time, crossing time, cycle length; uWave2: ramp, how long a spot stays lit, mirrorOut, block spacing;
   // uWave4: tilt, curve, surge, reverse; uWave5: the screen (camera centre x, z, half width, half height))
   const WAVE = { uWave: { value: new THREE.Vector4() }, uWave2: { value: new THREE.Vector4() }, uWave3: { value: new THREE.Vector4(0, -1, 0, 0) },
-    uWave4: { value: new THREE.Vector4() }, uWave5: { value: new THREE.Vector4(0, 0, 1, 1) }, uBand: { value: new THREE.Vector4() }, uBand2: { value: new THREE.Vector4() } };
+    uWave4: { value: new THREE.Vector4() }, uWave5: { value: new THREE.Vector4(0, 0, 1, 1) }, uBand: { value: new THREE.Vector4() }, uBand2: { value: new THREE.Vector4() },
+    // the other ways of lighting the wall (CFG.net): the grid's origin, spacing and the tube's middle (uNet), the mode's
+    // timing (uNetA, uNetB), the wider wall's cells (uFld2), the signal's arrival times (uNetTex) and the ripples' sources
+    uNet: { value: new THREE.Vector4(0, 0, 1, 1) }, uNetA: { value: new THREE.Vector4() }, uNetB: { value: new THREE.Vector4() }, uNetC: { value: new THREE.Vector4() },
+    uFld2: { value: new THREE.Vector4(0, 0, 1, 1) }, uNetTex: { value: null },
+    uSrc: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uCurTex: { value: null }, uCurO: { value: new THREE.Vector4(0, 0, 1, 1) } };
+  const NETM = { sweep: 0, spread: 1, ripples: 2, traffic: 3, heartbeat: 4, cursor: 5 }[(CFG.net && CFG.net.mode) || "sweep"] || 0;
   const WAVE_GLSL = [
+    "#define NET_MODE " + NETM,
     "uniform vec4 uWave, uWave2, uWave3, uWave4, uWave5, uBand, uBand2;",
     // seconds since the lighting wave last reached this spot (0 .. the cycle): u across the screen, v down it. Its pace
     // swells and eases on the way across (surge), the top arrives first (tilt), and the front bows and sways (curve),
@@ -300,9 +307,116 @@ async function start(box) {
     "  float n = 0.5 + 0.5 * ( 0.55 * sin( 6.2831853 * ( 0.7 * t + wh( seed ) ) ) + 0.3 * sin( 6.2831853 * ( 1.9 * t + wh( seed + 1.7 ) ) ) + 0.15 * sin( 6.2831853 * ( 5.3 * t + wh( seed + 3.1 ) ) ) );",
     "  return max( 0.6 * n, pow( max( 0.0, sin( 6.2831853 * ( 0.23 * t + wh( seed + 5.3 ) ) ) ), 40.0 ) );",
     "}",
-    // a square's light at world x: the C's sweep (its own, from the script) handing over to the wall's wave
+    // ---- the other ways of lighting the wall (CFG.net.mode): each gives a spot's light level (netLevel), a brightness
+    // multiplier on top (netGain) and the connectors' light (netConn)
+    "uniform vec4 uNet, uNetA, uNetB, uNetC, uFld2;\nuniform vec4 uSrc[ 4 ];\nuniform sampler2D uNetTex;",
+    // the grid cell at p, and what's stored for it (r: when the signal reaches it, g: where it came from)
+    "vec2 ncell( vec2 p ) { return floor( ( p - uNet.xy ) / uNet.z + 0.5 ); }",
+    "vec4 nget( vec2 c ) { vec2 q = c - uFld2.xy; if ( q.x < 0.0 || q.y < 0.0 || q.x >= uFld2.z || q.y >= uFld2.w ) return vec4( 1e4, 0.0, 0.0, 0.0 );",
+    "  return texture2D( uNetTex, ( q + 0.5 ) / uFld2.zw ); }",
+    // spread: lit from when the signal arrives (a), until everything goes out together (uNetA: time in the cycle, fade
+    // up, when it all goes out, how long that takes)
+    "float flev( float a ) { return smoothstep( a, a + uNetA.y, uNetA.x ) * ( 1.0 - smoothstep( uNetA.z, uNetA.z + uNetA.w, uNetA.x ) ); }",
+    // ripples: rings travelling out link by link (diamond-shaped) from each source (uSrc: x, z, when it fired, strength;
+    // uNetA: time, speed in blocks per second, ring width in blocks, how quickly a ring fades)
+    // cursor: the network lights up around where the cursor hovers (spreading out link by link, so the lit patch is
+    // diamond-shaped), and everywhere it has passed stays lit for a moment, then fades away. The script keeps that light
+    // as a smooth map over the whole wall (uCurTex, placed by uCurO: its corner x, z and size), so however fast and far
+    // the cursor goes, all of its path stays lit
+    "uniform sampler2D uCurTex;\nuniform vec4 uCurO;",
+    "float curs( vec2 p ) { return texture2D( uCurTex, ( p - uCurO.xy ) / uCurO.zw ).r; }",
+    "float rip( vec2 p, float delay ) { float s = 0.0;",
+    "  for ( int i = 0; i < 4; i ++ ) { vec4 S = uSrc[ i ]; float age = uNetA.x - S.z - delay; if ( age < 0.0 || S.w <= 0.0 ) continue;",
+    "    vec2 d = abs( p - S.xy ) / uNet.z; float x = ( d.x + d.y - uNetA.y * age ) / uNetA.z;",
+    "    s += S.w * exp( - x * x ) * exp( - age / uNetA.w ) * smoothstep( 0.0, 0.25, age ); }",
+    "  return s; }",
+    // heartbeat: a soft double beat that lights the network, which then stays lit for a breath and eases back to rest
+    // (uNetA: time, seconds per heartbeat, how quickly each beat rises, how long the easing back takes; uNetC: how long it
+    // stays lit, how much later it reaches each block further from the middle of the screen, the second beat's delay)
+    "float hbump( float x, float r, float d ) { return smoothstep( 0.0, r, x ) * exp( - max( x - r, 0.0 ) / d ); }",
+    "float heart( vec2 p, float delay ) { float dd = length( p - uWave5.xy ) / uNet.z * uNetC.y, ph = mod( uNetA.x - dd - delay, uNetA.y );",
+    "  float r = uNetA.z, g = uNetC.z;",
+    "  float lub = 0.7 * hbump( ph, r, 0.25 );",
+    "  float dub = smoothstep( g, g + r, ph ) * ( 0.88 + 0.12 * exp( - max( ph - g - r, 0.0 ) / 0.3 ) )",
+    "    * ( 1.0 - smoothstep( g + r + uNetC.x, g + r + uNetC.x + uNetA.w, ph ) );",
+    "  return max( lub, dub ); }",
+    // traffic: packets of light running along lanes (one along each row, one down each column), each lane its own pace,
+    // spacing and direction; at each block a packet splits around both sides of its tube and joins up again on the far
+    // side, on into the next connector (so no lane ever stops short); X: how far along the lane, in blocks (uNetA: time,
+    // trail length, share of lanes busy, pace)
+    "float lane( float id, float X ) { if ( wh( id * 3.17 + 1.3 ) > uNetA.z ) return 0.0;",
+    "  float dir = wh( id * 5.1 + 2.0 ) < 0.5 ? - 1.0 : 1.0, sp = ( 1.2 + 1.4 * wh( id * 7.3 + 4.0 ) ) * uNetA.w, spc = uNetC.x + ( uNetC.y - uNetC.x ) * wh( id * 9.7 + 6.0 );",
+    "  float behind = mod( - ( dir * X - sp * uNetA.x - spc * wh( id * 11.0 + 8.0 ) ), spc ), ahead = spc - behind;",
+    // a soft glowing head and a tail fading behind it (both easing to nothing, so there's no hard edge anywhere)
+    "  float tail = exp( - behind / uNetA.y ) * smoothstep( 0.0, 0.12, behind ) * ( 1.0 - smoothstep( 0.6 * spc, spc, behind ) );",
+    "  return tail + 0.8 * exp( - pow( min( behind, ahead ) / 0.1, 2.0 ) ); }",
+    // along half a tube's square, from the middle of one side (0) round to the middle of the opposite side (1)
+    "float perim( float a, float b, float m ) { if ( abs( a ) > abs( b ) ) { float s = 0.25 * min( abs( b ) / m, 1.0 ); return a < 0.0 ? s : 1.0 - s; }",
+    "  return 0.25 + 0.5 * clamp( ( a + m ) / ( 2.0 * m ), 0.0, 1.0 ); }",
+    // (p is first taken onto the tube's square, so the faces glow from the tube beside them)
+    "float traf( vec2 p ) { vec2 c = ncell( p ), l = p - ( uNet.xy + c * uNet.z ); float m = uNet.w;",
+    "  l *= m / max( max( abs( l.x ), abs( l.y ) ), 1e-4 );",
+    "  return max( lane( c.y, c.x - 0.4 + 0.8 * perim( l.x, l.y, m ) ), lane( 1000.0 + c.x, c.y - 0.4 + 0.8 * perim( l.y, l.x, m ) ) ); }",
+    // a spot's light level, and a brightness multiplier on top (uNetB: the network's resting level and brightness)
+    "float netLevel( vec2 p ) {",
+    "#if NET_MODE == 1",
+    "  return flev( nget( ncell( p ) ).r );",
+    "#elif NET_MODE == 2",
+    "  return clamp( uNetB.x + rip( p, 0.0 ), 0.0, 1.0 );",
+    "#elif NET_MODE == 3",
+    "  return clamp( uNetB.x + traf( p ), 0.0, 1.0 );",
+    "#elif NET_MODE == 4",
+    "  return clamp( uNetB.x + ( 1.0 - uNetB.x ) * heart( p, 0.0 ), 0.0, 1.0 );",
+    "#elif NET_MODE == 5",
+    "  return clamp( uNetB.x + max( curs( p ), rip( p, 0.0 ) ), 0.0, 1.0 );",
+    "#else",
+    "  return wlev( wd( p.x, p.y ) );",
+    "#endif",
+    "}",
+    "float netGain( vec2 p ) {",
+    "#if NET_MODE == 1",
+    // (a block flashes as the signal reaches it)
+    "  float a = nget( ncell( p ) ).r; return 1.0 + 0.6 * step( a, uNetA.x ) * exp( - ( uNetA.x - a ) / 0.35 );",
+    "#elif NET_MODE == 2",
+    "  return mix( uNetB.y, 1.25, clamp( rip( p, 0.0 ), 0.0, 1.0 ) );",
+    "#elif NET_MODE == 3",
+    "  return mix( uNetB.y, 1.3, clamp( traf( p ), 0.0, 1.0 ) );",
+    "#elif NET_MODE == 4",
+    "  return mix( uNetB.y, 1.2, clamp( heart( p, 0.0 ), 0.0, 1.0 ) );",
+    "#elif NET_MODE == 5",
+    "  return mix( uNetB.y, 1.25, clamp( max( curs( p ), rip( p, 0.0 ) ), 0.0, 1.0 ) );",
+    "#else",
+    "  return 1.0;",
+    "#endif",
+    "}",
+    // a connector's light: between cells A and B (B to the right of / below A), s of the way from A's middle to B's
+    // (gain: its brightness multiplier)
+    "float netConn( vec2 p, vec2 A, vec2 B, float s, bool hz, out float gain ) {",
+    "  gain = netGain( p );",
+    "#if NET_MODE == 1",
+    // the links the signal travelled along light from one end to the other as it passes; the rest light up a moment
+    // after both their ends are lit (the whole network joining up)
+    "  vec4 a = nget( A ), b = nget( B ); gain = 1.0;",
+    "  float fromA = hz ? 1.0 : 3.0, fromB = hz ? 2.0 : 4.0;",
+    "  if ( abs( b.g - fromA ) < 0.5 ) return flev( a.r + s * ( b.r - a.r ) );",
+    "  if ( abs( a.g - fromB ) < 0.5 ) return flev( b.r + ( 1.0 - s ) * ( a.r - b.r ) );",
+    "  return 0.8 * flev( max( a.r, b.r ) + 0.6 );",
+    "#elif NET_MODE == 3",
+    "  float m = uNet.w / uNet.z, X = ( hz ? A.x : A.y ) + 0.4 + 0.2 * clamp( ( s - m ) / ( 1.0 - 2.0 * m ), 0.0, 1.0 );",
+    "  float t = hz ? lane( A.y, X ) : lane( 1000.0 + A.x, X );",
+    "  gain = mix( uNetB.y, 1.3, clamp( t, 0.0, 1.0 ) );",
+    "  return clamp( uNetB.x + t, 0.0, 1.0 );",
+    "#elif NET_MODE == 4",
+    // (the links light a beat after the tubes)
+    "  float h = heart( p, uNetB.z ); gain = mix( uNetB.y, 1.2, clamp( h, 0.0, 1.0 ) );",
+    "  return clamp( uNetB.x + ( 1.0 - uNetB.x ) * h, 0.0, 1.0 );",
+    "#else",
+    "  return netLevel( p );",
+    "#endif",
+    "}",
+    // a square's light at world x: the C's sweep (its own, from the script) handing over to the wall's light
     "float wglow( float c, float x, float z, float seed ) {",
-    "  float g = wlev( wd( x, z ) );",
+    "  float g = netLevel( vec2( x, z ) );",
     "  return mix( c, g, uWave3.x );",
     "}"].join("\n") + "\n";
   // matcap shading, read straight down (orthographic), with a per-square glow (the sweep; on the wall, the wave) and
@@ -311,7 +425,7 @@ async function start(box) {
   const withGlow = (sh, local) => {
     Object.assign(sh.uniforms, WAVE);
     sh.vertexShader = "attribute float aGlow, aPres;\nvarying float vGlow, vPres, vWX, vWZ, vSeed;\n" + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
-      sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\ntransformed *= mix( 0.9, 1.0, aPres );\nvGlow = aGlow; vPres = aPres;\n" +
+      sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\nvGlow = aGlow; vPres = aPres;\n" +
         "vec4 wP = modelMatrix * instanceMatrix * vec4( position, 1.0 ); vWX = wP.x; vWZ = wP.z; vSeed = float( gl_InstanceID ) * 3.7 + 11.0;" + (local ? "\nvLocal = position; vLocalN = normal;" : ""));
     sh.fragmentShader = "varying float vGlow, vPres, vWX, vWZ, vSeed;\n" + WAVE_GLSL + (local ? "varying vec3 vLocal, vLocalN;\n" : "") +
       sh.fragmentShader.replace("vec3 viewDir = normalize( vViewPosition );", ORTHO)
@@ -389,7 +503,7 @@ async function start(box) {
       "float ndv = clamp( abs( normal.z ), 0.0, 1.0 );\n" +
       "diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( gw, 0.0, 1.0 ) );\n" +
       // the flicker on the wall (shared with the connectors: the same field, so they dip together)
-      "outgoingLight *= uWave3.y >= 0.0 ? 1.0 : mix( 1.0, wflk( vec2( vWX, vWZ ), wlev( wd( vWX, vWZ ) ), uWave3.z, uWave3.w ), uWave3.x );").replace(
+      "outgoingLight *= uWave3.y >= 0.0 ? 1.0 : mix( 1.0, wflk( vec2( vWX, vWZ ), netLevel( vec2( vWX, vWZ ) ), uWave3.z, uWave3.w ) * netGain( vec2( vWX, vWZ ) ), uWave3.x );").replace(
       "vec4 matcapColor = texture2D( matcap, uv );",
       // (with connectors: the band riding the wave brightens the tubes as it passes, as it does the connectors)
       "float wb = uWave3.y >= 0.0 ? 0.0 : wband( wd( vWX, vWZ ) ) * uBand2.y * uWave3.x;\n" +
@@ -667,7 +781,7 @@ async function start(box) {
       // the wider wall: the grid's cells the pulled-back camera can see, around the C's own 60 (worked out for the screen
       // shape). They grow out from the wall as the camera pulls back, with the screen's shape (so where the screen
       // already showed empty space around the wall, like tall phones, the wall visibly spreads into it)
-      const field = { fc0: 0, fc1: -1, fr0: 0, fr1: -1, n: C.n, dist: [] };
+      const field = { fc0: 0, fc1: -1, fr0: 0, fr1: -1, n: C.n, dist: [], inst: null };
       let full = true;
       function setField() {
         const v = view(PS, 1, 1), A = zoomBy(1), hh = v.hh * A + pitch, hw = v.hh * aspect * A + pitch;
@@ -684,6 +798,8 @@ async function start(box) {
         const Dz = Math.max(v.z + v.hh * A - zb, za - (v.z - v.hh * A), pitch);
         let n = C.n;
         field.dist.length = 0;
+        // which square sits in each cell (-1: one of the C's own, always there)
+        const inst = new Int32Array((fc1 - fc0 + 1) * (fr1 - fr0 + 1)).fill(-1);
         for (let r = fr0; r <= fr1; r++) for (let c = fc0; c <= fc1; c++) {
           if (c >= c0 && c <= c1 && r >= 0 && r < NR) continue;
           const x = xF + c * pitch, z = z0 + r * pitch;
@@ -692,12 +808,14 @@ async function start(box) {
           for (let k = 0; k < 4; k++) occ[k].array.set(FAR.elements.slice(k * 4, k * 4 + 4), n * 4);
           glow.array[n] = 0;
           field.dist.push(Math.max(Math.max(xa - x, x - xb, 0) / Dx, Math.max(za - z, z - zb, 0) / Dz));
+          inst[(r - fr0) * (fc1 - fc0 + 1) + (c - fc0)] = n;
           n++;
         }
-        Object.assign(field, { fc0, fc1, fr0, fr1, n });
+        Object.assign(field, { fc0, fc1, fr0, fr1, n, inst });
         shownN = -1;
         full = true;
         if (con) con.resize(fc1 - fc0 + 1, fr1 - fr0 + 1);
+        netField();
       }
       // the wider wall's squares are only drawn while the camera pulls back (before that they'd sit, unseen, in the way
       // of the C and the line moving through the same space)
@@ -706,6 +824,157 @@ async function start(box) {
         const want = zp > 0 ? field.n : C.n;
         if (want !== shownN) { shownN = want; for (const m of all) m.count = want; }
         for (let j = C.n; j < field.n; j++) pres.array[j] = zp <= 0 ? 0 : smoothstep((zp * 1.3 - field.dist[j - C.n]) / 0.3);
+      }
+
+
+      // ---- the other ways of lighting the wall (CFG.net)
+      const NT = CFG.net || { mode: "sweep" };
+      WAVE.uNet.value.set(xF, z0, pitch, (inner + outer) / 2);
+      if (NETM !== 0) WAVE.uBand2.value.y = 0;
+      const blank = new THREE.DataTexture(new Float32Array([1e4, 0, 0, 0]), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+      blank.needsUpdate = true;
+      WAVE.uNetTex.value = blank;
+      let netTex = null, flood = null;
+      const FCn = () => field.fc1 - field.fc0 + 1, FRn = () => field.fr1 - field.fr0 + 1;
+      // is the cell k there right now (the C's own always; the wider wall's as they fade in), and on screen
+      const present = (k) => { const j = field.inst[k]; return j < 0 ? 1 : pres.array[j]; };
+      const cellXZ = (k) => [xF + (field.fc0 + k % FCn()) * pitch, z0 + (field.fr0 + Math.floor(k / FCn())) * pitch];
+      const onScreen = (k) => { const [x, z] = cellXZ(k); return Math.abs(x - camera.position.x) < camera.right && Math.abs(z - camera.position.z) < camera.top; };
+      function netField() {
+        WAVE.uFld2.value.set(field.fc0, field.fr0, FCn(), FRn());
+        if (NETM === 5) cursorField();
+        if (NETM !== 1) return;
+        if (netTex) netTex.dispose();
+        netTex = new THREE.DataTexture(new Float32Array(FCn() * FRn() * 4).fill(1e4), FCn(), FRn(), THREE.RGBAFormat, THREE.FloatType);
+        netTex.magFilter = netTex.minFilter = THREE.NearestFilter; netTex.generateMipmaps = false; netTex.needsUpdate = true;
+        WAVE.uNetTex.value = netTex;
+        flood = null;
+      }
+      // spread: from a random block on screen, the signal finds its way to every block along the links, each link taking
+      // its own (random) time, so it branches out unevenly; it remembers where each block's signal came from
+      function startFlood() {
+        const FC = FCn(), FR = FRn(), n = FC * FR, L = NT.link || [0.25, 0.55];
+        const cand = [];
+        for (let k = 0; k < n; k++) if (present(k) > 0.5 && onScreen(k)) cand.push(k);
+        const o = cand.length ? cand[Math.floor(Math.random() * cand.length)] : 0;
+        const dist = new Float32Array(n).fill(1e4), par = new Uint8Array(n), done = new Uint8Array(n);
+        const heap = [];   // a small binary heap of [time, cell]
+        const push = (d, k) => { heap.push([d, k]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+        const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const a = 2 * i + 1, b = a + 1; let m = i; if (a < heap.length && heap[a][0] < heap[m][0]) m = a; if (b < heap.length && heap[b][0] < heap[m][0]) m = b; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+        dist[o] = 0; push(0, o);
+        while (heap.length) {
+          const [d, k] = pop();
+          if (done[k]) continue;
+          done[k] = 1;
+          const c = k % FC, r = Math.floor(k / FC);
+          // (to: the cell, and how the new cell's signal arrived: 1 from the left, 2 from the right, 3 from above, 4 from below)
+          for (const [dc, dr, from] of [[1, 0, 1], [-1, 0, 2], [0, 1, 3], [0, -1, 4]]) {
+            const cc = c + dc, rr = r + dr;
+            if (cc < 0 || rr < 0 || cc >= FC || rr >= FR) continue;
+            const kk = rr * FC + cc;
+            if (done[kk]) continue;
+            const w = (L[0] + Math.random() * (L[1] - L[0])) * (present(kk) > 0.5 ? 1 : 3);
+            if (d + w < dist[kk]) { dist[kk] = d + w; par[kk] = from; push(d + w, kk); }
+          }
+        }
+        let tAll = 0;
+        for (let k = 0; k < n; k++) if (present(k) > 0.5 && onScreen(k)) tAll = Math.max(tAll, dist[k]);
+        const a = netTex.image.data;
+        for (let k = 0; k < n; k++) { a[k * 4] = dist[k]; a[k * 4 + 1] = par[k]; }
+        netTex.needsUpdate = true;
+        const ramp = NT.ramp || 0.5, off = tAll + ramp + (NT.holdOn || 0);
+        flood = { start: clock, off, len: off + (NT.fadeOut || 1) + (NT.holdOff || 0) };
+      }
+
+      // cursor: where the pointer is over the wall (in the world), eased so the light glides after it; everywhere it
+      // passes is lit (a light map over the whole wider wall, 4 points per block, smoothed between them) and stays lit
+      // for `hold`, then fades over `fade`; a click (or tap) sends a ripple out from there; and when nobody's pointing for
+      // a while (phones, or the cursor elsewhere), the odd ripple from a random block keeps it alive
+      const ptr = { on: false, u: 0.5, v: 0.5, x: 0, z: 0, px: 0, pz: 0, set: false, lastMove: -1e9, nextIdle: 0, rip: 0, clicks: [] };
+      if (NETM === 5) {
+        const at = (e) => { const r = box.getBoundingClientRect(); ptr.u = (e.clientX - r.left) / r.width; ptr.v = (e.clientY - r.top) / r.height; };
+        box.addEventListener("pointermove", (e) => { at(e); ptr.on = true; ptr.lastMove = clock; });
+        box.addEventListener("pointerleave", () => { ptr.on = false; });
+        box.addEventListener("pointerdown", (e) => { at(e); ptr.lastMove = clock; ptr.clicks.push([ptr.u, ptr.v]); });
+      }
+      const RES = 4;
+      const cmap = { tex: null, W: 0, H: 0, ox: 0, oz: 0, peak: null, when: null };
+      function cursorField() {
+        const W = FCn() * RES, H = FRn() * RES;
+        if (cmap.tex) cmap.tex.dispose();
+        cmap.tex = new THREE.DataTexture(new Uint8Array(W * H * 4), W, H, THREE.RGBAFormat);
+        cmap.tex.magFilter = cmap.tex.minFilter = THREE.LinearFilter; cmap.tex.generateMipmaps = false; cmap.tex.needsUpdate = true;
+        Object.assign(cmap, { W, H, ox: xF + (field.fc0 - 0.5) * pitch, oz: z0 + (field.fr0 - 0.5) * pitch,
+          peak: new Float32Array(W * H), when: new Float32Array(W * H).fill(-1e9) });
+        WAVE.uCurTex.value = cmap.tex;
+        WAVE.uCurO.value.set(cmap.ox, cmap.oz, FCn() * pitch, FRn() * pitch);
+      }
+      const toWorld = (u, v) => [camera.position.x + (2 * u - 1) * camera.right, camera.position.z + (2 * v - 1) * camera.top];
+      function cursorUpdate(t) {
+        if (!cmap.tex) cursorField();
+        const dt = Math.min(Math.max(t - (ptr.prevT ?? t), 0), 0.1);
+        ptr.prevT = t;
+        const [tx, tz] = toWorld(ptr.u, ptr.v);
+        if (!ptr.set) { ptr.x = ptr.px = tx; ptr.z = ptr.pz = tz; ptr.set = true; }
+        const k = 1 - Math.exp(-dt / (NT.follow || 0.05));
+        ptr.px = ptr.x; ptr.pz = ptr.z;
+        ptr.x += (tx - ptr.x) * k; ptr.z += (tz - ptr.z) * k;
+        const hold = NT.hold || 0, fade = Math.max(NT.fade || 1.2, 0.01), reach = NT.reach || 2.2, step = pitch / RES;
+        const life = (age) => 1 - smoothstep((Math.max(age, 0) - hold) / fade);
+        if (ptr.on) {
+          // light everything along the way from where it was last frame to where it is now
+          const ax = ptr.px, az = ptr.pz, bx = ptr.x, bz = ptr.z, abx = bx - ax, abz = bz - az, ll = abx * abx + abz * abz;
+          const R = reach * pitch;
+          const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - R - cmap.ox) / step)), i1 = Math.min(cmap.W - 1, Math.ceil((Math.max(ax, bx) + R - cmap.ox) / step));
+          const j0 = Math.max(0, Math.floor((Math.min(az, bz) - R - cmap.oz) / step)), j1 = Math.min(cmap.H - 1, Math.ceil((Math.max(az, bz) + R - cmap.oz) / step));
+          for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+            const x = cmap.ox + (i + 0.5) * step, z = cmap.oz + (j + 0.5) * step;
+            const h = ll > 0 ? Math.min(1, Math.max(0, ((x - ax) * abx + (z - az) * abz) / ll)) : 0;
+            const d = (Math.abs(x - ax - h * abx) + Math.abs(z - az - h * abz)) / pitch;
+            const f = 1 - smoothstep((d - 0.2 * reach) / (0.8 * reach));
+            const q = j * cmap.W + i;
+            if (f > 0 && f >= cmap.peak[q] * life(t - cmap.when[q])) { cmap.peak[q] = f; cmap.when[q] = t; }
+          }
+        }
+        const out = cmap.tex.image.data;
+        for (let q = 0; q < cmap.peak.length; q++) out[q * 4] = Math.round(255 * cmap.peak[q] * life(t - cmap.when[q]));
+        cmap.tex.needsUpdate = true;
+        // clicks and taps: a ripple each
+        for (const [u, v] of ptr.clicks.splice(0)) { const [x, z] = toWorld(u, v); WAVE.uSrc.value[ptr.rip++ % 4].set(x, z, t, 1); }
+        // nobody pointing for a while: now and then a ripple from a random block on screen
+        if (NT.idle && t - ptr.lastMove > 3 && t >= ptr.nextIdle) {
+          const cand = [], n = FCn() * FRn();
+          for (let q = 0; q < n; q++) if (present(q) > 0.5 && onScreen(q)) cand.push(q);
+          if (cand.length) { const [x, z] = cellXZ(cand[Math.floor(Math.random() * cand.length)]); WAVE.uSrc.value[ptr.rip++ % 4].set(x, z, t, 0.8); }
+          ptr.nextIdle = t + NT.idle * (0.7 + 0.6 * Math.random());
+        }
+        WAVE.uNetA.value.set(t, NT.speed || 6, NT.width || 0.9, NT.life || 2.2);
+      }
+      const rips = [0, 1, 2, 3].map((i) => ({ next: i * (NT.every || 3) / 4 }));
+      function netUpdate() {
+        const t = clock;
+        if (NETM === 1) {
+          if (!flood || t - flood.start > flood.len || t < flood.start) startFlood();
+          WAVE.uNetA.value.set(t - flood.start, NT.ramp || 0.5, flood.off, NT.fadeOut || 1);
+        } else if (NETM === 2) {
+          // each of the 4 sources fires now and then from a random block on screen
+          rips.forEach((R, i) => {
+            if (t >= R.next || R.next - t > 60) {
+              const cand = [], n = FCn() * FRn();
+              for (let k = 0; k < n; k++) if (present(k) > 0.5 && onScreen(k)) cand.push(k);
+              if (cand.length) { const [x, z] = cellXZ(cand[Math.floor(Math.random() * cand.length)]); WAVE.uSrc.value[i].set(x, z, t, 1); }
+              R.next = t + (NT.every || 3) * (0.6 + 0.8 * Math.random());
+            }
+          });
+          WAVE.uNetA.value.set(t, NT.speed || 5, NT.width || 0.9, NT.life || 2.5);
+        } else if (NETM === 3) {
+          WAVE.uNetA.value.set(t, NT.trail || 0.9, NT.busy !== undefined ? NT.busy : 0.75, NT.pace || 1);
+          WAVE.uNetC.value.set((NT.spacing || [4, 10])[0], (NT.spacing || [4, 10])[1], 0, 0);
+        } else if (NETM === 4) {
+          WAVE.uNetA.value.set(t, NT.every || 6, NT.beat || 0.2, NT.fall || 1.4);
+          WAVE.uNetC.value.set(NT.hold || 1.6, NT.spread || 0.03, NT.second || 0.42, 0);
+        } else if (NETM === 5) cursorUpdate(t);
+        WAVE.uNetB.value.set(NT.rest || 0, NT.restBrightness !== undefined ? NT.restBrightness : 1, NT.linkDelay || 0, 0);
       }
 
       // the connectors between neighbouring blocks (across each gap, as thick as the tubes, tube to tube)
@@ -759,8 +1028,16 @@ async function start(box) {
             "  float d = hz ? dH : dV;",
             "  float p = hz ? min( cell( c, r ), cell( c + 1.0, r ) ) : min( cell( c2, q ), cell( c2, q + 1.0 ) );",
             "  if ( p < 0.002 ) discard;",
+            // (nothing to draw this far from a connector, even at its brightest: skip working out its light)
+            "  if ( d > 7.0 * uCon.w * uPx + uPx ) discard;",
+            "  float ng = 1.0;",
+            "#if NET_MODE == 0",
             "  float wv = wd( wp.x, wp.y ), g = clv( wv ), b = uWave3.y >= 0.0 ? 0.0 : wband( wv ) * uCw2.x;",
-            "  float fl = uWave3.y >= 0.0 ? 1.0 : wflk( wp, g, uCon2.z, uCon2.w );",
+            "#else",
+            "  float b = 0.0, g = uWave3.y >= 0.0 ? uWave3.y : hz ? netConn( wp, vec2( c, r ), vec2( c + 1.0, r ), gx - c, true, ng ) : netConn( wp, vec2( c2, q ), vec2( c2, q + 1.0 ), gz - q, false, ng );",
+            "  if ( uWave3.y >= 0.0 ) ng = 1.0;",
+            "#endif",
+            "  float fl = uWave3.y >= 0.0 ? 1.0 : wflk( wp, g, uCon2.z, uCon2.w ) * ng;",
             // the band riding the wave's front: brighter, with a wider halo, as it passes
             "  float core = clamp( 0.5 - d / uPx, 0.0, 1.0 ), a = clamp( core + uCon.z * ( 1.0 + b ) * exp( - max( d, 0.0 ) / ( uCon.w * ( 1.0 + 0.4 * b ) * uPx ) ), 0.0, 1.0 );",
             // (its coverage follows how lit the tube looks, which stays bright longer than its light level as it goes out)
@@ -787,13 +1064,13 @@ async function start(box) {
             tex.magFilter = tex.minFilter = THREE.NearestFilter; tex.generateMipmaps = false;
             mat.uniforms.uCells.value = tex;
           },
-          update(on, x0, X, Z, zp) {
+          update(on, xl, k, X, Z, zp) {
             quad.visible = on > 0.001 && !!tex;
             if (!quad.visible) return;
             const d = tex.image.data, FC = tex.image.width, FR = tex.image.height;
             d.fill(0);
             const put = (c, r, v) => { c -= field.fc0; r -= field.fr0; if (c >= 0 && r >= 0 && c < FC && r < FR) d[(r * FC + c) * 4] = Math.round(v * 255); };
-            for (let i = 0; i < C.n; i++) put(Math.round((X[i] - x0) / pitch), Math.round((Z[i] - z0) / pitch), 1);
+            for (let i = 0; i < C.n; i++) put(Math.round((X[i] - xl) / pitch) + k, Math.round((Z[i] - z0) / pitch), 1);
             if (zp > 0) {
               let j = C.n;
               for (let r = field.fr0; r <= field.fr1; r++) for (let c = field.fc0; c <= field.fc1; c++) {
@@ -805,8 +1082,8 @@ async function start(box) {
             renderer.getDrawingBufferSize(buf);
             const u = mat.uniforms;
             u.uView.value.set(camera.position.x, camera.position.z, camera.right, camera.top);
-            u.uGrid.value.x = x0;
-            u.uFld.value.set(field.fc0, field.fr0, FC, FR);
+            u.uGrid.value.x = xl;
+            u.uFld.value.set(field.fc0 - k, field.fr0, FC, FR);
             u.uCon2.value.set(on, K.strength, K.flicker, clock * K.flickerSpeed);
             u.uPx.value = 2 * camera.top / buf.y;
             u.uCon.value.w = K.haloWidth * renderer.getPixelRatio();
@@ -816,6 +1093,11 @@ async function start(box) {
 
       const X = new Array(C.n), Z = new Array(C.n);
       let lastZp = -1;
+      // where the grid's columns are right now: after the grid has formed the wall can still glide sideways for a while
+      // (its blocks wrapping round), so the light patterns tied to the grid (traffic lanes, the signal's cells, the
+      // connectors) follow the blocks as they glide instead of staying put while the blocks move under them. xLat moves
+      // with the blocks continuously; lk: how many whole columns it has moved from the finished grid
+      let xLat = xF, lk = 0;
       wall = {
         form, setField, field,
         // after the squares have moved: how formed the grid is (the grid lines and connectors show only once it is), the
@@ -823,14 +1105,19 @@ async function start(box) {
         update(w, fs, zp) {
           for (let i = 0; i < C.n; i++) { X[i] = inst[i].elements[12]; Z[i] = inst[i].elements[14]; }
           const g = gridErr(X, Z), off = still && forceGlow === null;
+          if (g.err < 0.05) xLat = g.x0 + pitch * Math.round((xLat - g.x0) / pitch); else xLat = xF;
+          lk = Math.round((xLat - xF) / pitch);
+          WAVE.uNet.value.x = xLat;
+          WAVE.uFld2.value.x = field.fc0 - lk;
           setPres(zp);
+          netUpdate();
           if (L) LN.uLn.value.set(L.width * renderer.getPixelRatio(), inner, LN.uLn.value.z, off ? 0 : w * (1 - smoothstep((g.err - 0.01) / 0.04)));
           if (con) {
             // they fade in over the stretch of scroll just after the grid has formed (`connect.fadeIn`, a share of the
             // scroll animation), easing in time too (see loop), and go as the blocks move out of their places
             conTo = off ? 0 : w * smoothstep((fs - form) / Math.max((K.fadeIn !== undefined ? K.fadeIn : 0.08) * PS, 1));
             if (handSnap) conOn = conTo;
-            con.update(conOn * (1 - smoothstep((g.err - 0.01) / 0.11)), g.x0, X, Z, zp);
+            con.update(conOn * (1 - smoothstep((g.err - 0.01) / 0.11)), xLat, lk, X, Z, zp);
           }
           // uploads: just the C's squares each frame, the wider wall's when they change
           const rng = (a, from, count) => { if (!full) a.addUpdateRange(from, count); a.needsUpdate = true; };
