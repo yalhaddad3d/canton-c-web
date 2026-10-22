@@ -26,7 +26,6 @@
     max-width: 62ch; }
   .intro h1 { font-size: 22px; font-weight: 500; margin: 0; letter-spacing: 0.01em; text-wrap: balance; }
   .intro p { margin: 0; color: var(--muted); }
-  .after { height: 50vh; }
   .c3d { cursor: crosshair; }
 
   .hud { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); top: 16px; font: 12px/1.4 var(--mono); color: var(--muted);
@@ -75,7 +74,6 @@
     <div class="hud" id="hud"><span><b id="hudPhase">C</b></span><span id="hudCam">ortho</span></div>
   </div>
 </div>
-<div class="after"></div>
 
 <aside class="panel" id="panel" aria-label="Depth options">
   <header>
@@ -210,7 +208,8 @@ if (LOCK) {
   applyPreset(LOCK);
   $("#panel").hidden = true;
   $("#introTitle").textContent = "Idea " + p.key + ": " + p.name;
-  $("#introText").textContent = p.desc + " Scroll down: the C becomes the line, then the grid wall. Scroll back up for the C.";
+  $("#introText").hidden = true;
+  $("#hud").hidden = true;
 } else applyPreset(PRESETS.some((p) => p.id === saved) ? saved : "drift");
 $("#toggle").onclick = () => {
   const c = $("#panel").classList.toggle("closed");
