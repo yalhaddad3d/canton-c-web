@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>C Depth: Follow a Packet, Glass Connectors</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* layout: the scroll section fills the page; a quiet control panel floats at the right (a bottom sheet on phones) */
+  :root {
+    --bg: #10100E;          /* the render's background */
+    --panel: #181815;
+    --line: #2b2b25;
+    --fg: #e6e4d8;
+    --muted: #8e8c7f;
+    --neon: #e4e35a;        /* the lit tube */
+    --neon-dim: #6f6e2c;
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans); }
+  .intro { min-height: 55vh; display: flex; flex-direction: column; justify-content: flex-end; gap: 10px;
+    padding-block: 48px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    max-width: 62ch; }
+  .intro h1 { font-size: 22px; font-weight: 500; margin: 0; letter-spacing: 0.01em; text-wrap: balance; }
+  .intro p { margin: 0; color: var(--muted); }
+  .c3d { cursor: crosshair; }
+
+  .hud { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); top: 16px; font: 12px/1.4 var(--mono); color: var(--muted);
+    pointer-events: none; display: flex; flex-direction: column; gap: 2px; }
+  .hud b { color: var(--fg); font-weight: 500; }
+
+  .panel { position: fixed; right: max(12px, env(safe-area-inset-right, 0px)); top: max(12px, env(safe-area-inset-top, 0px)); bottom: max(12px, env(safe-area-inset-bottom, 0px));
+    width: 300px; display: flex; flex-direction: column; background: color-mix(in srgb, var(--panel) 92%, transparent);
+    border: 1px solid var(--line); border-radius: 6px; z-index: 5; backdrop-filter: blur(6px); }
+  .panel header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .panel header h2 { margin: 0; font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .panel .body { overflow-y: auto; padding: 12px 14px 16px; display: flex; flex-direction: column; gap: 16px; }
+  .panel.closed { bottom: auto; }
+  .panel.closed .body { display: none; }
+  button { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 5px 9px; cursor: pointer; }
+  button:hover { border-color: var(--neon-dim); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--neon); outline-offset: 2px; }
+  .presets { display: grid; gap: 6px; }
+  .preset { text-align: left; display: grid; gap: 1px; padding: 8px 10px; }
+  .preset .k { font: 11px var(--mono); color: var(--muted); }
+  .preset .n { font-weight: 500; }
+  .preset[aria-pressed="true"] { border-color: var(--neon); background: color-mix(in srgb, var(--neon) 8%, transparent); }
+  .preset[aria-pressed="true"] .k { color: var(--neon); }
+  .desc { color: var(--muted); font-size: 13px; margin: 0; }
+  .grp { display: flex; flex-direction: column; gap: 8px; }
+  .grp h3 { margin: 0; font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 8px; font-size: 13px; }
+  .row output { font: 12px var(--mono); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--neon); }
+  .chk { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .chk input { accent-color: var(--neon); }
+  .jumps { display: flex; flex-wrap: wrap; gap: 6px; }
+  @media (max-width: 640px) {
+    .panel { left: max(8px, env(safe-area-inset-left, 0px)); right: max(8px, env(safe-area-inset-right, 0px)); top: auto; width: auto; max-height: 46vh; }
+    .panel.closed { max-height: none; }
+  }
+</style>
+
+<div class="intro">
+  <h1 id="introTitle">Grid wall depth lab</h1>
+  <p id="introText">The Data Traffic page with its real blocks, tubes and motion, rebuilt so the camera can leave the top view. Round two: ideas A and B, and five new camera ideas built on them. Pick one in the panel, then scroll. The C stays orthographic in every version.</p>
+</div>
+
+<div class="c3d-track" style="position:relative;height:225vh">
+  <div class="c3d" data-src="c_web.bin" style="position:sticky;top:0;width:100%;height:100vh;overflow:hidden">
+    <div class="hud" id="hud"><span><b id="hudPhase">C</b></span><span id="hudCam">ortho</span></div>
+  </div>
+</div>
+
+<aside class="panel" id="panel" aria-label="Depth options">
+  <header>
+    <h2>Depth ideas</h2>
+    <button id="toggle" aria-expanded="true">Hide</button>
+  </header>
+  <div class="body">
+    <div class="presets" id="presets"></div>
+    <p class="desc" id="desc"></p>
+    <div class="jumps">
+      <button data-jump="0.01">C</button>
+      <button data-jump="0.2">Line</button>
+      <button data-jump="0.695">Grid wall</button>
+      <button data-jump="0.96">Pulled back</button>
+    </div>
+    <div class="grp" id="controls"></div>
+  </div>
+</aside>
+
+<script type="module">
+// set to an idea's id ("leave", "drift", "flow", "crane", "lean", "focus", "chase") to make this page that idea alone,
+// without the panel; null = the lab, with every idea and the panel
+const LOCK = "chase";
+// ------------------------------------------------------------------ the ideas
+const BASE = { persp: 1, fov: 34, tilt: 34, yaw: 0, frame: 0.9, drift: 0, parallax: 0, key: 0.25, sheen: 0.2, spill: 0.5, ao: 0.5, fog: 0.5,
+  revZoom: 1.7, revTilt: 14, revYaw: 0, field: 1, travel: 0, inertia: 0, chase: 0, dof: 0 };
+const PRESETS = [
+  { id: "today", key: "0", name: "Today", desc: "The page as it is: one top orthographic camera from start to end. Every square faces the camera at the same angle, so on the wall they all shade alike and read as a flat pattern.",
+    v: { ...BASE, persp: 0, key: 0, sheen: 0, spill: 0, ao: 0, fog: 0, revZoom: 2.2, revTilt: 0, field: 0 } },
+  { id: "leave", key: "A", name: "Leave ortho after the C", desc: "Orthographic only while it's the C. As the C starts to unbend, the camera dolly-zooms into a real lens and tips back, so the staircase depth inside the C shows through the line, and the wall recedes into the distance.",
+    v: { ...BASE } },
+  { id: "drift", key: "B", name: "Drift and parallax", desc: "Idea A plus a camera that never quite stops: a slow orbit and sway, and a few degrees of tilt following the cursor. Constant small parallax keeps the blocks reading as objects.",
+    v: { ...BASE, tilt: 32, yaw: 12, drift: 1, parallax: 1 } },
+  { id: "flow", key: "G", name: "Flow forward", desc: "Once the wall has formed, the camera keeps gliding forward over it, slowly on its own and faster as you scroll, with the wall carrying on endlessly ahead. The blocks stream toward you, so depth comes from motion: where finance flows, literally.",
+    v: { ...BASE, tilt: 48, fov: 38, frame: 0.85, yaw: 8, drift: 0.5, parallax: 0.7, fog: 0.7, travel: 1 } },
+  { id: "crane", key: "H", name: "Crane on the pull back", desc: "The pull back at the end becomes a crane move: while it widens, the camera swings round about 40° and rises, so the wall turns under you and its rows sweep across the frame instead of simply shrinking.",
+    v: { ...BASE, drift: 0.5, parallax: 0.7, revZoom: 2.2, revTilt: 20, revYaw: 40 } },
+  { id: "lean", key: "I", name: "Scroll lean", desc: "The camera responds to how you scroll: scroll down and it tips forward over the wall, stop and it springs back and settles with a slight overshoot. The wall feels like a physical surface with weight.",
+    v: { ...BASE, tilt: 32, yaw: 12, drift: 0.6, parallax: 0.8, inertia: 1 } },
+  { id: "focus", key: "J", name: "Tilt-shift focus", desc: "A shallow depth of field: the row in the middle of the frame is sharp and the rows nearer and further melt into blur, like a macro lens. It reads instantly as distance, and makes the blocks feel like a small, precise object.",
+    v: { ...BASE, tilt: 46, fov: 30, yaw: 12, frame: 0.8, drift: 0.6, parallax: 0.8, dof: 0.7 } },
+  { id: "chase", key: "K", name: "Follow a packet", desc: "Once the wall is formed, the camera drops low and rides along with one packet of light as it runs down its row, the wall streaming past on both sides. The C becomes a network you travel through rather than look at.",
+    v: { ...BASE, tilt: 34, yaw: 12, fov: 40, drift: 0.4, parallax: 0.6, fog: 0.8, chase: 1, dof: 0.35 } },
+];
+const CONTROLS = [
+  ["Camera", [
+    ["persp", "Lens after C", "check"], ["fov", "Lens (fov)", 10, 70, 1, "°"], ["tilt", "Tilt", 0, 75, 1, "°"], ["yaw", "Turn", -45, 45, 1, "°"],
+    ["frame", "Framing", 0.5, 1.5, 0.01, "×"], ["drift", "Drift", 0, 1, 0.01, ""], ["parallax", "Cursor", 0, 1, 0.01, ""]]],
+  ["Motion", [
+    ["travel", "Flow forward", 0, 2, 0.01, ""], ["inertia", "Scroll lean", 0, 1.5, 0.01, ""], ["chase", "Follow packet", 0, 1, 0.01, ""]]],
+  ["Pull back", [
+    ["revZoom", "Widen", 1, 3, 0.05, "×"], ["revTilt", "Tilt", -30, 30, 1, "°"], ["revYaw", "Swing", -60, 60, 1, "°"]]],
+  ["Lens and look", [
+    ["dof", "Focus blur", 0, 1.5, 0.01, ""], ["spill", "Tube spill", 0, 1.5, 0.01, ""], ["ao", "Contact dark", 0, 1, 0.01, ""], ["fog", "Depth fade", 0, 1.5, 0.01, ""], ["field", "Wall goes on", "check"]]],
+];
+const P = { ...PRESETS[1].v };   // live settings (start on idea A)
+let presetId = "leave";
+
+const CFG = {
+  three: "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+  look: { block: "c_block.webp", tube: "c_tube.webp", levels: 8 },
+  glow: 1.0, brightness: 1.0,
+  grain: { amount: 0.25, lift: 0.002, scale: 72 },
+  glass: { clear: 0.75, edge: 3.0 },
+  spill: { color: [0.12, 0.19, 0.0], reach: 0.07, amount: 0.2 },
+  background: "#10100E",
+  camera: { x: 2.4152, z: -0.8530, width: 22.2597 },
+  zoom: 1.0, ends: 0.8,
+  net: { rest: 0.12, restBrightness: 0.45, busy: 0.9, spacing: [2.5, 5], pace: 1, trail: 0.9 },
+  connect: { width: 1.0, fadeIn: 0.08 },
+  tubes: { flicker: 0.45, flickerSpeed: 1.0 },
+  maxPixelRatio: 2,
+  sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 210, outStep: 1.0, ramp: 16, reverse: false },
+  // the scroll, as shares of the section (225vh tall: 1.25 screens of scrolling): the C holds, eases into the line, the
+  // line and the grid wall play, the camera pulls back (zoom), and it rests for `end`. smooth: seconds to catch up
+  scroll: { hold: 0.035, blend: 0.07, zoom: 0.26, end: 0.05, smooth: 0.25 },
+  // the wider wall around the C's 60 (columns either side, rows behind / in front)
+  // the wider wall coming in: how fast it spreads out from the wall (blocks per second), over how many blocks each one
+  // fades in (so each takes soft / speed seconds), and how long the camera moves (flow, follow) take to ease in (seconds)
+  reveal: { speed: 2.2, soft: 5, ease: 3 },
+};
+
+// ------------------------------------------------------------------ panel
+const $ = (s) => document.querySelector(s);
+const presetsEl = $("#presets"), ctlEl = $("#controls"), inputs = {};
+for (const p of PRESETS) {
+  const b = document.createElement("button");
+  b.className = "preset"; b.dataset.id = p.id; b.setAttribute("aria-pressed", "false");
+  b.innerHTML = `<span class="k">${p.key === "0" ? "Baseline" : "Idea " + p.key}</span><span class="n">${p.name}</span>`;
+  b.onclick = () => applyPreset(p.id);
+  presetsEl.appendChild(b);
+}
+for (const [title, list] of CONTROLS) {
+  const g = document.createElement("div"); g.className = "grp";
+  g.innerHTML = `<h3>${title}</h3>`;
+  for (const [k, label, a, b, step, unit] of list) {
+    if (a === "check") {
+      const l = document.createElement("label"); l.className = "chk";
+      l.innerHTML = `<input type="checkbox" id="c-${k}"> ${label}`;
+      const inp = l.querySelector("input");
+      inp.onchange = () => { P[k] = inp.checked ? 1 : 0; markCustom(); };
+      inputs[k] = { inp, set: (v) => { inp.checked = !!v; } };
+      g.appendChild(l);
+    } else {
+      const r = document.createElement("div"); r.className = "row";
+      r.innerHTML = `<label for="c-${k}">${label}</label><input type="range" id="c-${k}" min="${a}" max="${b}" step="${step}"><output></output>`;
+      const inp = r.querySelector("input"), out = r.querySelector("output");
+      const show = () => { const v = +inp.value; out.textContent = (Math.abs(v) >= 10 || step >= 1 ? Math.round(v) : v.toFixed(2)) + unit; };
+      inp.oninput = () => { P[k] = +inp.value; show(); markCustom(); };
+      inputs[k] = { inp, set: (v) => { inp.value = v; show(); } };
+      g.appendChild(r);
+    }
+  }
+  ctlEl.appendChild(g);
+}
+function syncInputs() { for (const k in inputs) inputs[k].set(P[k]); }
+function applyPreset(id) {
+  const p = PRESETS.find((q) => q.id === id);
+  Object.assign(P, p.v); presetId = id; syncInputs();
+  for (const b of presetsEl.children) b.setAttribute("aria-pressed", String(b.dataset.id === id));
+  $("#desc").textContent = p.desc;
+  if (!LOCK) try { localStorage.setItem("depthlab.preset2", id); } catch (e) {}
+}
+function markCustom() {
+  for (const b of presetsEl.children) b.setAttribute("aria-pressed", "false");
+  $("#desc").textContent = "Custom mix. Pick an idea above to reset.";
+}
+let saved = null; try { saved = localStorage.getItem("depthlab.preset2"); } catch (e) {}
+if (LOCK) {
+  // a page for one idea: that idea alone, no panel
+  const p = PRESETS.find((q) => q.id === LOCK);
+  applyPreset(LOCK);
+  $("#panel").hidden = true;
+  $("#introTitle").textContent = "Idea " + p.key + ": " + p.name + " (glass connectors)";
+  $("#introText").hidden = true;
+  $("#hud").hidden = true;
+} else applyPreset(PRESETS.some((p) => p.id === saved) ? saved : "drift");
+$("#toggle").onclick = () => {
+  const c = $("#panel").classList.toggle("closed");
+  $("#toggle").textContent = c ? "Show" : "Hide"; $("#toggle").setAttribute("aria-expanded", String(!c));
+};
+document.querySelectorAll("[data-jump]").forEach((b) => b.onclick = () => {
+  const t = $(".c3d-track");
+  window.scrollTo({ top: t.offsetTop + (t.offsetHeight - innerHeight) * +b.dataset.jump, behavior: "smooth" });
+});
+
+// ------------------------------------------------------------------ the file (as on the live pages)
+function parse(buf) {
+  const dv = new DataView(buf);
+  let o = 0;
+  const pad = () => { o = (o + 3) & ~3; };
+  const u32 = () => { const v = dv.getUint32(o, true); o += 4; return v; };
+  const f32s = (k) => { const a = []; for (let i = 0; i < k; i++) { a.push(dv.getFloat32(o, true)); o += 4; } return a; };
+  const arr = (T, k) => { const a = new T(buf.slice(o, o + k * T.BYTES_PER_ELEMENT)); o += k * T.BYTES_PER_ELEMENT; pad(); return a; };
+  if (String.fromCharCode(...new Uint8Array(buf, 0, 4)) !== "CWEB") throw new Error("not a c_web.bin file");
+  o = 4;
+  const version = u32();
+  if (version !== 4) throw new Error("c_web.bin version " + version);
+  const n = dv.getUint16(o, true), nParts = dv.getUint16(o + 2, true); o += 4;
+  const nClips = u32(), fps = f32s(1)[0];
+  const gq = f32s(6), sym = f32s(4);
+  for (let k = 0; k < 2; k++) { u32(); f32s(5); }
+  const parts = [];
+  for (let p = 0; p < nParts; p++) {
+    const mat = u32(), nv = u32(), ni = u32();
+    const qp = arr(Uint16Array, nv * 3), qn = arr(Int8Array, nv * 4), idx = arr(Uint16Array, ni);
+    const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3);
+    for (let v = 0; v < nv; v++) for (let a = 0; a < 3; a++) { pos[v * 3 + a] = gq[a] + qp[v * 3 + a] * gq[3 + a]; nor[v * 3 + a] = qn[v * 4 + a] / 127; }
+    parts.push({ mat, pos, nor, idx });
+  }
+  const clips = [];
+  for (let c = 0; c < nClips; c++) {
+    const nf = u32(), q = f32s(10);
+    const tracks = [];
+    for (let i = 0; i < n; i++) {
+      const nt = u32(), nr = u32(), nc = u32();
+      const tf = arr(Uint16Array, nt), tv = arr(Uint16Array, nt * 3), td = arr(Int16Array, nt * 3);
+      const rf = arr(Uint16Array, nr), rv = arr(Int16Array, nr * 4), rd = arr(Int16Array, nr * 4);
+      const cs = arr(Uint16Array, nc);
+      const T = new Float32Array(nt * 3), TD = new Float32Array(nt * 3), R = new Float32Array(nr * 4), RD = new Float32Array(nr * 4);
+      for (let k = 0; k < nt * 3; k++) { const a = k % 3; T[k] = q[a] + tv[k] * q[3 + a]; TD[k] = td[k] / 32767 * q[6 + a]; }
+      for (let k = 0; k < nr * 4; k++) { R[k] = rv[k] / 32767; RD[k] = rd[k] / 32767 * q[9]; }
+      const cut = new Uint8Array(nf);
+      for (const f of cs) cut[f] = 1;
+      tracks.push({ tf, T, TD, rf, R, RD, cut, ct: 0, cr: 0 });
+    }
+    clips.push({ nf, tracks });
+  }
+  return { n, fps, sym, parts, loop: clips[0], scroll: clips[1] };
+}
+function hermite(frames, V, D, dim, f, cur, cut, out) {
+  let j = cur;
+  if (f < frames[j] || j > frames.length - 2) j = 0;
+  while (j < frames.length - 2 && frames[j + 1] <= f) j++;
+  const f0 = frames[j], h = frames[j + 1] - f0, i0 = j * dim, i1 = i0 + dim;
+  if (cut[f0] && h === 1) { for (let k = 0; k < dim; k++) out[k] = V[i0 + k]; return j; }
+  const u = (f - f0) / h, u2 = u * u, u3 = u2 * u;
+  const a = 2 * u3 - 3 * u2 + 1, b = (u3 - 2 * u2 + u) * h, c = -2 * u3 + 3 * u2, d = (u3 - u2) * h;
+  for (let k = 0; k < dim; k++) out[k] = a * V[i0 + k] + b * D[i0 + k] + c * V[i1 + k] + d * D[i1 + k];
+  return j;
+}
+const smoothstep = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const D2R = Math.PI / 180;
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+start($(".c3d")).catch((e) => { console.warn("[lab]", e); $("#hudPhase").textContent = "Couldn't load: " + e.message; });
+
+async function start(box) {
+  const [THREE, data] = await Promise.all([
+    import(CFG.three),
+    fetch(box.dataset.src).then(async (r) => { if (!r.ok) throw new Error("c_web.bin: HTTP " + r.status);
+      if (!/\.txt$/.test(box.dataset.src)) return r.arrayBuffer();
+      const b = atob((await r.text()).trim()), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a.buffer; }),
+  ]);
+  const C = parse(data);
+  const track = box.closest(".c3d-track");
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  renderer.setClearColor(CFG.background, 1);
+  const canvas = renderer.domElement;
+  canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block";
+  box.prepend(canvas);
+  const scene = new THREE.Scene();
+  const BG = new THREE.Color(CFG.background);
+  scene.fog = new THREE.Fog(CFG.background, 1e8, 1e9);
+
+  const base = new URL(box.dataset.src, location.href);
+  const loader = new THREE.TextureLoader();
+  const tex = (name) => new Promise((ok, no) => loader.load(new URL(name, base).href, (t) => { t.colorSpace = THREE.SRGBColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; ok(t); }, undefined, no));
+  const [blockTex, tubeTex] = await Promise.all([tex(CFG.look.block), tex(CFG.look.tube)]);
+
+  // ---- the square's own frame (as on the live pages)
+  const blk = C.parts.find((p) => p.mat === 0) || C.parts[0];
+  const nAx = new THREE.Vector3(C.sym[0], C.sym[1], C.sym[2]).normalize();
+  let uAx = null, best = 0;
+  for (let k = 0; k < blk.nor.length; k += 3) {
+    const v = new THREE.Vector3(blk.nor[k], blk.nor[k + 1], blk.nor[k + 2]);
+    if (Math.abs(v.dot(nAx)) > 0.1) continue;
+    v.addScaledVector(nAx, -v.dot(nAx)).normalize();
+    let votes = 0;
+    for (let j = 0; j < blk.nor.length; j += 3) { const w = new THREE.Vector3(blk.nor[j], blk.nor[j + 1], blk.nor[j + 2]); if (Math.abs(w.dot(nAx)) < 0.1 && Math.abs(Math.abs(w.dot(v)) - 1) < 0.02) votes++; }
+    if (votes > best) { best = votes; uAx = v; }
+  }
+  if (!uAx) uAx = new THREE.Vector3(1, 0, 0).cross(nAx).normalize();
+  const vAx = new THREE.Vector3().crossVectors(nAx, uAx).normalize();
+  let half = 0, thick = 0;
+  for (let k = 0; k < blk.pos.length; k += 3) { const p = new THREE.Vector3(blk.pos[k], blk.pos[k + 1], blk.pos[k + 2]); half = Math.max(half, Math.abs(p.dot(uAx)), Math.abs(p.dot(vAx))); thick = Math.max(thick, Math.abs(p.dot(nAx))); }
+  const tub = C.parts.find((p) => p.mat === 1);
+  let rTube = 0.1 * half, inner = half, outer = half;
+  if (tub) {
+    let ax = 0, dg = 0; outer = 0;
+    for (let k = 0; k < tub.pos.length; k += 3) {
+      const p = new THREE.Vector3(tub.pos[k], tub.pos[k + 1], tub.pos[k + 2]), a = Math.abs(p.dot(uAx)), b = Math.abs(p.dot(vAx)), m = Math.max(a, b);
+      ax = Math.max(ax, a, b); dg = Math.max(dg, (a + b) / Math.SQRT2); inner = Math.min(inner, m); outer = Math.max(outer, m);
+    }
+    rTube = Math.min(Math.max((ax * Math.SQRT2 - dg) / (Math.SQRT2 - 1), 0), half);
+  }
+  const rGlow = Math.max(rTube, 3 * CFG.spill.reach * half);
+
+  // ---- the motion
+  const PL = C.loop.nf - 1, PS = C.scroll.nf - 1;
+  const tv = new Float32Array(3), qv = new Float32Array(4);
+  const pA = new THREE.Vector3(), qA = new THREE.Quaternion(), pB = new THREE.Vector3(), qB = new THREE.Quaternion();
+  const one = new THREE.Vector3(1, 1, 1), M = new THREE.Matrix4();
+  const quarter = [0, 1, 2, 3].map((k) => new THREE.Quaternion().setFromAxisAngle(nAx, k * Math.PI / 2));
+  const qTry = new THREE.Quaternion();
+  function at(clip, i, f, p, q) {
+    const t = clip.tracks[i];
+    t.ct = hermite(t.tf, t.T, t.TD, 3, f, t.ct, t.cut, tv);
+    t.cr = hermite(t.rf, t.R, t.RD, 4, f, t.cr, t.cut, qv);
+    p.set(tv[0], tv[1], tv[2]); q.set(qv[0], qv[1], qv[2], qv[3]).normalize();
+  }
+  function poseAt(i, fLoop, fScroll, w) {
+    if (w <= 0) at(C.loop, i, fLoop, pA, qA);
+    else if (w >= 1) at(C.scroll, i, fScroll, pA, qA);
+    else {
+      at(C.loop, i, fLoop, pA, qA); at(C.scroll, i, fScroll, pB, qB);
+      let b = -1, bk = 0;
+      for (let k = 0; k < 4; k++) { const d = Math.abs(qTry.copy(qA).multiply(quarter[k]).dot(qB)); if (d > b) { b = d; bk = k; } }
+      qA.multiply(quarter[bk]).slerp(qB, w); pA.lerp(pB, w);
+    }
+  }
+  const S = CFG.sweep;
+  const level = (i, f) => Math.max(level1(i, f), level1(i, f + S.loop));
+  function level1(i, f) { const a = S.inStart + S.inStep * i, b = S.outStart + S.outStep * i; return smoothstep((f - a) / S.ramp) * (1 - smoothstep((f - b) / S.ramp)); }
+
+  // ---- the finished grid
+  const Pf = [];
+  for (let i = 0; i < C.n; i++) { at(C.scroll, i, PS, pA, qA); Pf.push([pA.x, pA.z]); }
+  const nn = Pf.map((p, i) => Math.min(...Pf.map((q, j) => j === i ? 1e9 : Math.hypot(p[0] - q[0], p[1] - q[1])))).sort((a, b) => a - b);
+  const pitch = nn[nn.length >> 1];
+  const phase = (vals) => { let s = 0, c = 0; for (const v of vals) { s += Math.sin(2 * Math.PI * v / pitch); c += Math.cos(2 * Math.PI * v / pitch); } return Math.atan2(s, c) / (2 * Math.PI) * pitch; };
+  const zph = phase(Pf.map((p) => p[1])), rowsF = Pf.map((p) => Math.round((p[1] - zph) / pitch));
+  const r0 = Math.min(...rowsF), NR = Math.max(...rowsF) - r0 + 1, NC = Math.round(C.n / NR), z0 = zph + r0 * pitch;
+  const gridErr = (X, Z) => {
+    let s = 0, c = 0, err = 0;
+    for (let i = 0; i < C.n; i++) { const a = 2 * Math.PI * X[i] / pitch; s += Math.sin(a); c += Math.cos(a); }
+    const x0 = Math.atan2(s, c) / (2 * Math.PI) * pitch;
+    for (let i = 0; i < C.n; i++) { const row = Math.min(NR - 1, Math.max(0, Math.round((Z[i] - z0) / pitch))); err += Math.hypot(X[i] - x0 - Math.round((X[i] - x0) / pitch) * pitch, Z[i] - z0 - row * pitch); }
+    return { x0, err: err / (C.n * pitch) };
+  };
+  // the frame from which no block moves any more (the wall has stopped gliding sideways, its blocks wrapping round, and
+  // every block has come down to the same height)
+  let settled = PS;
+  {
+    const X1 = [], Z1 = [], Y1 = [];
+    for (let i = 0; i < C.n; i++) { at(C.scroll, i, PS, pA, qA); X1.push(pA.x); Z1.push(pA.z); Y1.push(pA.y); }
+    for (let f = PS; f >= 0; f -= 0.5) {
+      let dev = 0;
+      for (let i = 0; i < C.n; i++) { at(C.scroll, i, f, pA, qA); dev = Math.max(dev, Math.abs(pA.x - X1[i]) + Math.abs(pA.z - Z1[i]) + Math.abs(pA.y - Y1[i])); }
+      if (dev > 0.03 * pitch) break;
+      settled = f;
+    }
+  }
+  let form = PS;
+  for (let f = PS; f >= 0; f--) {
+    const X = [], Z = [];
+    for (let i = 0; i < C.n; i++) { at(C.scroll, i, f, pA, qA); X.push(pA.x); Z.push(pA.z); }
+    if (gridErr(X, Z).err > 0.03) break;
+    form = f;
+  }
+  const xF = gridErr(Pf.map((p) => p[0]), Pf.map((p) => p[1])).x0;
+  const colsF = Pf.map((p) => Math.round((p[0] - xF) / pitch)), c0 = Math.min(...colsF), c1 = c0 + NC - 1;
+  at(C.scroll, 0, PS, pA, qA);
+  const restQ = qA.clone(), restY = pA.y;
+
+  // ---- the lattice: the C's own cells, and a wider wall that follows the camera (so it can travel over it forever)
+  const inWall = (c, r) => c >= c0 && c <= c1 && r >= 0 && r < NR;
+  const FX = 22, FZ = 18, FW = 2 * FX + 1, FH = 2 * FZ + 1, NCELL = FW * FH;
+  let ox = 0, oz = 0;   // the lattice cell in the middle of the wider wall
+  const rel = (c, r) => { const a = c - ox + FX, b = r - oz + FZ; return a < 0 || b < 0 || a >= FW || b >= FH ? -1 : b * FW + a; };
+  const NMAX = C.n + NCELL;
+
+  // ---- the traffic lanes: one along each row and one down each column (repeating, so the wall can go on forever)
+  const NT = CFG.net, R = rng(7), LR = 40, LC = 48, lr0 = -20, lc0 = c0 - 20, LN = LR + LC;
+  const lanes = new Float32Array(LN * 4);
+  for (let k = 0; k < LN; k++) {
+    const busy = R() < NT.busy, dir = R() < 0.5 ? -1 : 1, sp = (1.2 + 1.4 * R()) * NT.pace, spc = NT.spacing[0] + (NT.spacing[1] - NT.spacing[0]) * R(), ph = R();
+    lanes.set([dir, sp, busy ? spc : -1, ph], k * 4);
+  }
+  const laneTex = new THREE.DataTexture(lanes, LN, 1, THREE.RGBAFormat, THREE.FloatType);
+  laneTex.magFilter = laneTex.minFilter = THREE.NearestFilter; laneTex.needsUpdate = true;
+  const mod = (a, b) => a - b * Math.floor(a / b);
+  // the row whose packets the camera follows (busy, running left to right, as near the middle of the wall as there is)
+  const chaseRow = [...Array(NR).keys()].sort((a, b) => Math.abs(a - (NR - 1) / 2) - Math.abs(b - (NR - 1) / 2))
+    .find((r) => { const k = mod(r - lr0, LR) * 4; return lanes[k + 2] > 0 && lanes[k] > 0; }) ?? 0;
+
+  // ---- shaders
+  const U = {
+    uNet: { value: new THREE.Vector4(xF, z0, pitch, (inner + outer) / 2) },
+    uNetA: { value: new THREE.Vector4(0, NT.trail, 0, 0) },
+    uNetB: { value: new THREE.Vector4(NT.rest, NT.restBrightness, 0, CFG.tubes.flicker) },
+    uLanes: { value: laneTex }, uLaneO: { value: new THREE.Vector4(lr0, lc0, LR, LC) },
+    uMask: { value: new THREE.Vector4(-1e5, 1e5, 1, 0) },
+    // the background, as the colour things fade into: mixed in after the colour conversion, so in the colours of wherever
+    // it's drawn (the screen: sRGB; the focus blur's image: linear). Set before each render (bgFor)
+    uBg: { value: new THREE.Vector3() },
+    uKey: { value: new THREE.Vector4() }, uKeyDir: { value: new THREE.Vector3(0, 1, 0) },
+    uSpill2: { value: new THREE.Vector4() },
+    uTubeTex: { value: tubeTex },
+  };
+  const BG_SRGB = new THREE.Color(CFG.background).getRGB(new THREE.Color(), THREE.SRGBColorSpace).toArray();
+  const BG_LIN = new THREE.Color(CFG.background).toArray();   // (three keeps colours linear)
+  const bgFor = (linear) => U.uBg.value.fromArray(linear ? BG_LIN : BG_SRGB);
+  const NET_GLSL = `
+uniform vec4 uNet, uNetA, uNetB, uLaneO, uMask, uKey, uSpill2;
+uniform vec3 uBg, uKeyDir;
+uniform sampler2D uLanes, uTubeTex;
+float wh( float n ) { return fract( sin( n * 12.9898 + 78.233 ) * 43758.5453 ); }
+float wn2( vec2 p ) { vec2 i = floor( p ), f = fract( p ); f = f * f * ( 3.0 - 2.0 * f );
+  float a = wh( i.x * 7.0 + i.y * 131.0 ), b = wh( i.x * 7.0 + 7.0 + i.y * 131.0 ), c = wh( i.x * 7.0 + i.y * 131.0 + 131.0 ), d = wh( i.x * 7.0 + 7.0 + i.y * 131.0 + 131.0 );
+  return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y ); }
+float wnet( vec2 p, float t ) { vec2 q = p / ( 2.2 * uNet.z );
+  float n = 0.6 * wn2( q + vec2( 0.35, 0.13 ) * t ) + 0.4 * wn2( 2.1 * q - vec2( 0.2, 0.5 ) * t + 7.3 );
+  float blink = pow( max( 0.0, sin( 6.2831853 * ( 0.23 * t + 0.5 * wn2( 0.3 * q + 3.7 ) ) ) ), 40.0 );
+  return max( 0.8 * smoothstep( 0.3, 0.8, n ), blink ); }
+float wflk( vec2 p, float g ) { return 1.0 - uNetB.w * smoothstep( 0.85, 1.0, g ) * wnet( p, uNetA.x ); }
+vec4 lp( float id ) { return texture2D( uLanes, vec2( ( id + 0.5 ) / ( uLaneO.z + uLaneO.w ), 0.5 ) ); }
+float laneP( vec4 L, float X ) { if ( L.z <= 0.0 ) return 0.0; float spc = L.z;
+  float behind = mod( - ( L.x * X - L.y * uNetA.x - spc * L.w ), spc ), ahead = spc - behind;
+  float tail = exp( - behind / uNetA.y ) * smoothstep( 0.0, 0.12, behind ) * ( 1.0 - smoothstep( 0.6 * spc, spc, behind ) );
+  return tail + 0.8 * exp( - pow( min( behind, ahead ) / 0.1, 2.0 ) ); }
+float rowL( float r, float X ) { return laneP( lp( mod( r - uLaneO.x, uLaneO.z ) ), X ); }
+float colL( float c, float X ) { return laneP( lp( uLaneO.z + mod( c - uLaneO.y, uLaneO.w ) ), X ); }
+vec2 ncell( vec2 p ) { return floor( ( p - uNet.xy ) / uNet.z + 0.5 ); }
+float perim( float a, float b, float m ) { if ( abs( a ) > abs( b ) ) { float s = 0.25 * min( abs( b ) / m, 1.0 ); return a < 0.0 ? s : 1.0 - s; }
+  return 0.25 + 0.5 * clamp( ( a + m ) / ( 2.0 * m ), 0.0, 1.0 ); }
+float traf( vec2 p ) { vec2 c = ncell( p ), l = p - ( uNet.xy + c * uNet.z ); float m = uNet.w;
+  l *= m / max( max( abs( l.x ), abs( l.y ) ), 1e-4 );
+  return max( rowL( c.y, c.x - 0.4 + 0.8 * perim( l.x, l.y, m ) ), colL( c.x, c.y - 0.4 + 0.8 * perim( l.y, l.x, m ) ) ); }
+float netLevel( vec2 p ) { return clamp( uNetB.x + traf( p ), 0.0, 1.0 ); }
+float netGain( vec2 p ) { return mix( uNetB.y, 1.3, clamp( traf( p ), 0.0, 1.0 ) ); }
+float wglow( float c, vec2 p ) { return mix( c, netLevel( p ), uNetB.z ); }
+float emask( float x ) { return uMask.w < 0.5 ? 1.0 : mix( 1.0, smoothstep( uMask.x - uMask.z, uMask.x, x ) * ( 1.0 - smoothstep( uMask.y, uMask.y + uMask.z, x ) ), uMask.w ); }
+vec3 tubeLit( float g ) { float L = ${CFG.look.levels.toFixed(1)}; float lv = clamp( g, 0.0, 1.0 ) * ( L - 1.0 ), l0 = min( floor( lv ), L - 2.0 );
+  return mix( texture2D( uTubeTex, vec2( ( l0 + 0.5 ) / L, 0.5 ) ).rgb, texture2D( uTubeTex, vec2( ( l0 + 1.5 ) / L, 0.5 ) ).rgb, lv - l0 ); }
+`;
+  const withNet = (sh) => {
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = "attribute float aGlow, aPres;\nvarying float vGlow, vPres;\nvarying vec3 vW, vWN, vC, vLocal, vLocalN;\n" +
+      sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
+vGlow = aGlow; vPres = aPres; vLocal = position; vLocalN = normal;
+mat4 mI = modelMatrix * instanceMatrix; vW = ( mI * vec4( position, 1.0 ) ).xyz; vWN = normalize( mat3( mI ) * normal ); vC = ( mI * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;`);
+    sh.fragmentShader = "varying float vGlow, vPres;\nvarying vec3 vW, vWN, vC, vLocal, vLocalN;\n" + NET_GLSL +
+      sh.fragmentShader.replace("void main() {", "void main() {\nfloat pm = vPres * emask( vW.x );\nif ( pm < 0.004 ) discard;\nfloat gw = wglow( vGlow, vW.xz );");
+  };
+
+  // blocks: the Arnold matcap (it now turns with the view, so sides and tops shade differently) plus the extra light
+  const blockMat = new THREE.MeshMatcapMaterial({ matcap: blockTex });
+  blockMat.onBeforeCompile = (sh) => {
+    withNet(sh);
+    Object.assign(sh.uniforms, {
+      uGrain: { value: new THREE.Vector3(CFG.grain.amount, CFG.grain.lift, CFG.grain.scale) },
+      uU: { value: uAx }, uV: { value: vAx }, uN: { value: nAx }, uHalf: { value: half }, uRoundG: { value: rGlow },
+      uSpill: { value: new THREE.Color().fromArray(CFG.spill.color).multiplyScalar(CFG.spill.amount) }, uReach: { value: CFG.spill.reach * half },
+      uThick: { value: thick }, uGap: { value: pitch - 2 * outer + 0.5 * (outer - inner) },
+    });
+    sh.fragmentShader = `uniform vec3 uGrain, uU, uV, uN, uSpill;\nuniform float uHalf, uRoundG, uReach, uThick, uGap;
+float rsq( vec2 p, float a, float r ) { vec2 q = abs( p ) - vec2( a - r ); return length( max( q, 0.0 ) ) + min( max( q.x, q.y ), 0.0 ) - r; }
+float h3( vec3 p ) { p = fract( p * 0.3183099 + 0.1 ); p *= 17.0; return fract( p.x * p.y * p.z * ( p.x + p.y + p.z ) ); }
+float vn( vec3 x ) { vec3 i = floor( x ), f = fract( x ); f = f * f * ( 3.0 - 2.0 * f );
+  return mix( mix( mix( h3( i ), h3( i + vec3( 1, 0, 0 ) ), f.x ), mix( h3( i + vec3( 0, 1, 0 ) ), h3( i + vec3( 1, 1, 0 ) ), f.x ), f.y ),
+              mix( mix( h3( i + vec3( 0, 0, 1 ) ), h3( i + vec3( 1, 0, 1 ) ), f.x ), mix( h3( i + vec3( 0, 1, 1 ) ), h3( i + vec3( 1, 1, 1 ) ), f.x ), f.y ), f.z ); }
+` + sh.fragmentShader.replace("vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;", `vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;
+float iid = dot( vC, vec3( 1.7, 3.1, 2.3 ) );
+vec3 gp = vLocal * uGrain.z + iid;
+float gn = 0.65 * vn( gp ) + 0.35 * vn( gp * 2.3 + 11.7 );
+outgoingLight = outgoingLight * ( 1.0 + uGrain.x * ( 2.0 * gn - 1.0 ) ) + uGrain.y * gn;
+vec3 Nw = normalize( vWN ), Vw = normalize( cameraPosition - vW );
+float side = 1.0 - smoothstep( 0.35, 0.75, abs( Nw.y ) ), dy = vW.y - vC.y;
+// contact darkness: the sides darken toward the bottom of each block
+outgoingLight *= mix( 1.0, 0.25 + 0.75 * smoothstep( - uThick, 0.6 * uThick, dy ), uSpill2.y * side );
+// the key light: modelling the faces it faces, and a moving sheen
+float lam = max( dot( Nw, uKeyDir ), 0.0 );
+outgoingLight *= mix( 1.0, 0.3 + 1.3 * lam, uKey.x );
+vec3 Hh = normalize( uKeyDir + Vw );
+outgoingLight += uKey.y * pow( max( dot( Nw, Hh ), 0.0 ), uKey.z ) * vec3( 0.55, 0.55, 0.5 ) * ( 0.4 + 0.6 * gn );
+// the block's own tube lighting its top edge (as on the live page)
+float edge = - rsq( vec2( dot( vLocal, uU ), dot( vLocal, uV ) ), uHalf, uRoundG );
+float face = smoothstep( 0.6, 0.9, abs( dot( normalize( vLocalN ), uN ) ) );
+outgoingLight += gw * face * uSpill * exp( - max( edge, 0.0 ) / uReach );
+// the tubes' light on the sides: its own tube wrapping round it, and its neighbour's across the gap
+if ( uSpill2.x > 0.0 ) {
+  float own = gw * exp( - abs( dy ) / ( 0.7 * uThick ) );
+  float nb = uNetB.z * netLevel( vW.xz + normalize( Nw.xz + 1e-5 ) * uGap ) * exp( - abs( dy ) / ( 1.2 * uThick ) );
+  outgoingLight += uSpill2.x * side * ( 0.55 * own + 0.45 * nb ) * tubeLit( 1.0 ) * 0.6;
+}`).replace("#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor.rgb = mix( uBg, gl_FragColor.rgb, pm );");
+  };
+  // the glass (as on the live page; lit, it's solid)
+  const glassBlend = { transparent: true, depthWrite: false, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor };
+  const tubeMat = new THREE.MeshMatcapMaterial({ matcap: tubeTex, ...glassBlend });
+  tubeMat.onBeforeCompile = (sh) => {
+    withNet(sh);
+    Object.assign(sh.uniforms, { uLevels: { value: CFG.look.levels }, uGlass: { value: new THREE.Vector3(CFG.glass.clear, CFG.glass.edge, Math.max(CFG.glow, 1e-3)) }, uBright: { value: CFG.brightness } });
+    sh.fragmentShader = "uniform float uLevels, uBright;\nuniform vec3 uGlass;\n" + sh.fragmentShader.replace(
+      "vec4 matcapColor = texture2D( matcap, uv );",
+      `float lv = clamp( gw * uGlass.z, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );
+vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ), texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );
+matcapColor.rgb *= mix( 1.0, uBright, clamp( gw, 0.0, 1.0 ) );`).replace(
+      "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;",
+      `vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;
+float ndv = clamp( abs( normal.z ), 0.0, 1.0 );
+diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( gw, 0.0, 1.0 ) );
+outgoingLight *= mix( 1.0, wflk( vW.xz, netLevel( vW.xz ) ) * netGain( vW.xz ), uNetB.z );
+outgoingLight *= mix( 1.0 - 0.65 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, gw ) );`).replace(
+      "#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= pm;");
+  };
+  // the connectors: glass cylinders shaded exactly like the tubes (same see-through glass, brightness at rest, flicker and
+  // response to the traffic, which carries on from the tube into the connector), flaring slightly where they meet the
+  // tube like a welded glass joint, and drawn as one glass body with the tubes (their depth goes down together first, so
+  // only the outer surface of tube and connector together is shaded: no glass inside glass at the joints)
+  const conMat = new THREE.MeshMatcapMaterial({ matcap: tubeTex, ...glassBlend });
+  conMat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, U, { uLevels: { value: CFG.look.levels }, uConM: { value: new THREE.Vector2((Math.min(inner, half) - 0.02 * half) / pitch, 0) } });
+    sh.vertexShader = "attribute vec4 aCon;\nvarying vec4 vCon;\nvarying float vAlong;\nvarying vec3 vW;\n" + sh.vertexShader.replace("#include <begin_vertex>",
+      "#include <begin_vertex>\nvCon = aCon; vAlong = position.y / " + conGeoLen.toFixed(6) + " + 0.5; vW = ( modelMatrix * instanceMatrix * vec4( position, 1.0 ) ).xyz;");
+    sh.fragmentShader = "uniform float uLevels;\nuniform vec2 uConM;\nvarying vec4 vCon;\nvarying float vAlong;\nvarying vec3 vW;\n" + NET_GLSL + sh.fragmentShader.replace(
+      "vec4 matcapColor = texture2D( matcap, uv );",
+      `float hz = vCon.z;
+float s = mix( uConM.x, 1.0 - uConM.x, vAlong ), m = uNet.w / uNet.z;
+float X = ( hz > 0.5 ? vCon.x : vCon.y ) + 0.4 + 0.2 * clamp( ( s - m ) / ( 1.0 - 2.0 * m ), 0.0, 1.0 );
+float tr = hz > 0.5 ? rowL( vCon.y, X ) : colL( vCon.x, X );
+float g = clamp( uNetB.x + tr, 0.0, 1.0 ), gain = mix( uNetB.y, 1.3, clamp( tr, 0.0, 1.0 ) );
+float lv = clamp( g, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );
+vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ), texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );`).replace(
+      "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;",
+      `vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;
+float ndv = clamp( abs( normal.z ), 0.0, 1.0 );
+diffuseColor.a = max( mix( 0.25, 1.0, pow( 1.0 - ndv, 3.0 ) ), g );
+outgoingLight *= mix( 1.0, wflk( vW.xz, g ) * gain, uNetB.z );
+outgoingLight *= mix( 1.0 - 0.65 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, g ) );`).replace("#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= vCon.w * emask( vW.x );");
+  };
+
+  // ---- meshes
+  const glow = new THREE.InstancedBufferAttribute(new Float32Array(NMAX), 1); glow.setUsage(THREE.DynamicDrawUsage);
+  const pres = new THREE.InstancedBufferAttribute(new Float32Array(NMAX).fill(1), 1); pres.setUsage(THREE.DynamicDrawUsage);
+  const meshes = [];
+  for (const p of C.parts) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(p.pos, 3));
+    g.setAttribute("normal", new THREE.BufferAttribute(p.nor, 3));
+    g.setIndex(new THREE.BufferAttribute(p.idx, 1));
+    g.setAttribute("aGlow", glow); g.setAttribute("aPres", pres);
+    const m = new THREE.InstancedMesh(g, p.mat === 1 ? tubeMat : blockMat, NMAX);
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.frustumCulled = false; m.count = C.n;
+    scene.add(m); meshes.push(m);
+    if (p.mat === 1) {
+      const d = new THREE.InstancedMesh(g, new THREE.MeshBasicMaterial({ colorWrite: false }), NMAX);
+      d.instanceMatrix = m.instanceMatrix; d.frustumCulled = false; d.renderOrder = 1; d.count = C.n;
+      scene.add(d); meshes.push(d);
+      m.renderOrder = 2;
+    }
+  }
+  // connectors: every pair of neighbouring cells in the lattice
+  const pairs = [];
+  for (let b = 0; b < FH; b++) for (let a = 0; a < FW; a++) { if (a < FW - 1) pairs.push([a, b, 1]); if (b < FH - 1) pairs.push([a, b, 0]); }
+  const conGeo = (() => {
+    const R = (outer - inner) / 2 * CFG.connect.width;            // the tube's own radius
+    const cs = Math.min(inner, half) - 0.02 * half, L = pitch - 2 * cs;
+    const dEnd = outer - cs;                                       // from each end (inside the block) to the tube's surface
+    const F = 0.45, f = 1.5 * R;                                   // the fillet: how much wider at the joint, over how far
+    const rad = (y) => {
+      const d = (L / 2 - Math.abs(y)) - dEnd;                      // out from the tube's surface (negative: inside the tube)
+      return d >= 0 ? R * (1 + F * Math.pow(1 - smoothstep(d / f), 2)) : R * (1 + F * (1 - smoothstep(-d / (0.6 * R))));
+    };
+    const ys = new Set([0]);
+    for (const sgn of [-1, 1]) for (const d of [-L, -0.6 * R, -0.3 * R, 0, 0.15 * f, 0.35 * f, 0.6 * f, 0.85 * f, f, 2 * f])
+      ys.add(sgn * Math.max(0, Math.min(L / 2, L / 2 - dEnd - d)));
+    const pts = [...ys].sort((a, b) => a - b).map((y) => new THREE.Vector2(rad(y), y));
+    const g = new THREE.LatheGeometry(pts, 14);
+    g.userData.L = L;
+    return g;
+  })();
+  const conGeoLen = conGeo.userData.L;
+  const aCon = new THREE.InstancedBufferAttribute(new Float32Array(pairs.length * 4), 4); aCon.setUsage(THREE.DynamicDrawUsage);
+  conGeo.setAttribute("aCon", aCon);
+  const con = new THREE.InstancedMesh(conGeo, conMat, pairs.length);
+  con.instanceMatrix.setUsage(THREE.DynamicDrawUsage); con.frustumCulled = false; con.renderOrder = 2; con.count = 0;
+  scene.add(con);
+  // (its depth first, with the tubes', so tubes and connectors are shaded as one glass body)
+  const conDepth = new THREE.InstancedMesh(conGeo, new THREE.MeshBasicMaterial({ colorWrite: false }), pairs.length);
+  conDepth.instanceMatrix = con.instanceMatrix; conDepth.frustumCulled = false; conDepth.renderOrder = 1; conDepth.count = 0;
+  scene.add(conDepth);
+  // for the focus blur only: an invisible floor just under the finished wall (depth, no colour), so the gaps between the
+  // blocks read as being as far away as the blocks around them, instead of infinitely far (which blurred them, and the
+  // connectors in them, to the maximum)
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshBasicMaterial({ colorWrite: false }));
+  floor.rotation.x = -Math.PI / 2; floor.renderOrder = -1; floor.visible = false;
+  let blockBottom = 0;
+  for (let k = 0; k < blk.pos.length; k += 3) blockBottom = Math.max(blockBottom, Math.abs(blk.pos[k] * nAx.x + blk.pos[k + 1] * nAx.y + blk.pos[k + 2] * nAx.z));
+  scene.add(floor);
+  const conRad = (outer - inner) / 2 * CFG.connect.width;
+
+  // ---- camera framing (the live page's top-view plan, then turned into a lens)
+  const local = new THREE.Box3();
+  for (const p of C.parts) local.union(new THREE.Box3().setFromArray(p.pos));
+  const fixed = { x: CFG.camera.x, z: CFG.camera.z, hw: CFG.camera.width / 2, hh: CFG.camera.width / 2 };
+  const tubeV = (tub || C.parts[0]).pos, STEP = 4, NK = Math.floor(PS / STEP) + 1;
+  const foot = new Float32Array(NK * 4), v3 = new THREE.Vector3();
+  for (let k = 0; k < NK; k++) {
+    let x0 = 1e9, x1 = -1e9, zz0 = 1e9, zz1 = -1e9;
+    for (let i = 0; i < C.n; i++) {
+      at(C.scroll, i, Math.min(k * STEP, PS), pA, qA); M.compose(pA, qA, one);
+      for (let j = 0; j < tubeV.length; j += 6) { v3.set(tubeV[j], tubeV[j + 1], tubeV[j + 2]).applyMatrix4(M); x0 = Math.min(x0, v3.x); x1 = Math.max(x1, v3.x); zz0 = Math.min(zz0, v3.z); zz1 = Math.max(zz1, v3.z); }
+    }
+    foot.set([x0, x1, zz0, zz1], k * 4);
+  }
+  const footW = new Float32Array(NK * 4);
+  for (let k = 0; k < NK; k++) {
+    let x0 = -1e9, x1 = 1e9, zz0 = 1e9, zz1 = -1e9;
+    for (let j = Math.max(0, k - 2); j <= Math.min(NK - 1, k + 2); j++) { x0 = Math.max(x0, foot[j * 4]); x1 = Math.min(x1, foot[j * 4 + 1]); zz0 = Math.min(zz0, foot[j * 4 + 2]); zz1 = Math.max(zz1, foot[j * 4 + 3]); }
+    const m = 0.03 * (zz1 - zz0);
+    footW.set([x0, x1, zz0 - m, zz1 + m], k * 4);
+  }
+  let aspect = 1, plan = null;
+  function planCamera() {
+    const fh = Math.max(fixed.hh, fixed.hw / aspect) / CFG.zoom;
+    const H = new Float32Array(NK), X = new Float32Array(NK), Z = new Float32Array(NK), COV = new Float32Array(NK), WID = new Float32Array(NK), FIT = new Float32Array(NK);
+    for (let k = 0; k < NK; k++) {
+      const e = footW.subarray(k * 4, k * 4 + 4), wdt = e[1] - e[0], hgt = e[3] - e[2];
+      const fitV = hgt / 2, cover = wdt * CFG.ends / 2 / aspect;
+      H[k] = cover >= fitV ? Math.min(Math.max(fh, fitV), cover) : fitV;
+      X[k] = (e[0] + e[1]) / 2; Z[k] = (e[2] + e[3]) / 2; COV[k] = cover; FIT[k] = fitV;
+      WID[k] = smoothstep((wdt / Math.max(hgt, 1e-6) - 1.5) / 1.0);
+    }
+    const ease = (A, Rr) => A.map((_, k) => { let s = 0, n = 0; for (let j = Math.max(0, k - Rr); j <= Math.min(NK - 1, k + Rr); j++) { s += A[j]; n++; } return s / n; });
+    const Hs = ease(H, 6);
+    for (let k = 0; k < NK; k++) { const tall = Math.max(Hs[k], FIT[k]), narrow = Math.min(Hs[k], COV[k]); Hs[k] = Math.max(FIT[k], tall + (narrow - tall) * WID[k]); }
+    plan = { H: ease(Hs, 2).map((h, k) => Math.max(h, FIT[k])), X: ease(X, 2), Z: ease(Z, 2), fh };
+  }
+  function view(fs, w) {
+    let x = fixed.x, z = fixed.z, hh = plan.fh;
+    if (w > 0) {
+      const t = Math.min(fs / STEP, NK - 1), k0 = Math.min(Math.floor(t), NK - 2), a = Math.max(0, t - k0);
+      const lp = (A) => A[k0] + (A[k0 + 1] - A[k0]) * a;
+      x += (lp(plan.X) - x) * w; z += (lp(plan.Z) - z) * w; hh += (lp(plan.H) - hh) * w;
+    }
+    return { x, z, hh };
+  }
+  const camera = new THREE.PerspectiveCamera(1, 1, 1, 10);
+  const TH0 = Math.tan(0.25 * D2R);   // a 0.5° lens from far away: indistinguishable from the orthographic camera
+  const cam = { tilt: 0, yaw: 0, th: TH0, px: 0, py: 0 };   // eased
+  // the focus blur: the scene into a target with its depth, then a blur that grows with distance from the focus
+  const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+  rt.depthTexture = new THREE.DepthTexture(1, 1);
+  // first, how blurred each pixel is. Empty pixels (the gaps between blocks, with nothing behind them) take the focus of
+  // the nearest blocks around them, rather than counting as infinitely far away and blurring the gaps and the connectors
+  // in them to the maximum
+  const cocRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+  const DOF = { tDepth: { value: rt.depthTexture }, uRes: { value: new THREE.Vector2(1, 1) }, uNF: { value: new THREE.Vector2(1, 2) },
+    uFocus: { value: 1 }, uMax: { value: 12 }, uAmt: { value: 0 }, uPR: { value: 1 } };
+  const cocMat = new THREE.ShaderMaterial({
+    uniforms: DOF, depthTest: false, depthWrite: false,
+    vertexShader: "varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = vec4( position.xy, 0.0, 1.0 ); }",
+    fragmentShader: `uniform sampler2D tDepth;
+uniform vec2 uRes, uNF;
+uniform float uFocus, uMax, uAmt, uPR;
+varying vec2 vUv;
+float cocD( float d ) { float z = d * 2.0 - 1.0; z = 2.0 * uNF.x * uNF.y / ( uNF.y + uNF.x - z * ( uNF.y - uNF.x ) ); return min( uAmt * abs( 1.0 - uFocus / z ) * uMax * 3.0, uMax ); }
+void main() {
+  float d = texture2D( tDepth, vUv ).x, c = cocD( d );
+  if ( d >= 0.99999 ) {
+    float best = 1e9;
+    for ( int ring = 1; ring <= 5; ring ++ ) {
+      float rad = float( ring * ring ) * 3.0 * uPR;
+      for ( int k = 0; k < 12; k ++ ) {
+        float a = float( k ) * 0.5236 + float( ring ) * 0.26;
+        float dd = texture2D( tDepth, vUv + vec2( cos( a ), sin( a ) ) * rad / uRes ).x;
+        if ( dd < 0.99999 ) best = min( best, cocD( dd ) );
+      }
+      if ( best < 1e8 ) break;
+    }
+    if ( best < 1e8 ) c = best;
+  }
+  gl_FragColor = vec4( c, 0.0, 0.0, 1.0 );
+}`,
+  });
+  const cocScene = new THREE.Scene();
+  { const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), cocMat); q.frustumCulled = false; cocScene.add(q); }
+  const post = new THREE.ShaderMaterial({
+    uniforms: { tColor: { value: rt.texture }, tCoc: { value: cocRT.texture }, uRes: DOF.uRes },
+    depthTest: false, depthWrite: false,
+    vertexShader: "varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = vec4( position.xy, 0.0, 1.0 ); }",
+    fragmentShader: `uniform sampler2D tColor, tCoc;
+uniform vec2 uRes;
+varying vec2 vUv;
+float coc( vec2 uv ) { return texture2D( tCoc, uv ).r; }
+void main() {
+  float c0 = coc( vUv );
+  vec4 acc = vec4( texture2D( tColor, vUv ).rgb, 1.0 );
+  if ( c0 > 0.6 ) for ( int i = 0; i < 36; i ++ ) {
+    float fi = float( i ) + 0.5, r = sqrt( fi / 36.0 ) * c0, a = fi * 2.39996;
+    vec2 uv = vUv + vec2( cos( a ), sin( a ) ) * r / uRes;
+    float w = clamp( coc( uv ) - r + 1.0, 0.0, 1.0 );
+    acc += vec4( texture2D( tColor, uv ).rgb * w, w );
+  }
+  gl_FragColor = vec4( acc.rgb / acc.a, 1.0 );
+  #include <colorspace_fragment>
+}`,
+  });
+  const postScene = new THREE.Scene(), postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const pq = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), post); pq.frustumCulled = false; postScene.add(pq);
+  const ptr = { u: 0.5, v: 0.5, on: false };
+  box.addEventListener("pointermove", (e) => { const r = box.getBoundingClientRect(); ptr.u = (e.clientX - r.left) / r.width; ptr.v = (e.clientY - r.top) / r.height; ptr.on = true; });
+  box.addEventListener("pointerleave", () => { ptr.on = false; });
+
+  // ---- per-frame state
+  const heightAt = new Float32Array(NCELL), presAt = new Float32Array(NCELL), posX = new Float32Array(NCELL), posZ = new Float32Array(NCELL);
+  // where a connector starts: through the tube and just inside the block, so its end is hidden in the block with no gap
+  const conStart = Math.min(inner, half) - 0.02 * half, conLen = pitch - 2 * conStart;
+  const X = new Array(C.n), Z = new Array(C.n), Y = new Array(C.n), Q = Array.from({ length: C.n }, () => new THREE.Quaternion());
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const dbgNow = {};
+  let snapNext = 0, clock = 0, last = 0, sNow = progress(), hand = 0, conOn = 0, fieldOn = 0, reveal = 0, fieldVis = 0;
+  let flow = 0, sPrev = sNow, lean = 0, leanV = 0, chase = 0, chaseM = null;
+  function progress() { const r = track.getBoundingClientRect(), span = r.height - innerHeight; return span > 0 ? clamp01(-r.top / span) : 0; }
+  const yAx = new THREE.Vector3(0, 1, 0), dirV = new THREE.Vector3(), mid = new THREE.Vector3(), qC = new THREE.Quaternion(), sC = new THREE.Vector3();
+  const hudPhase = $("#hudPhase"), hudCam = $("#hudCam");
+
+  function draw(dt) {
+    let snap = false;
+    if (snapNext > 0) { snapNext--; dt = 50; snap = true; }
+    const fLoop = still ? 0 : (clock * C.fps) % PL, fSweep = (clock * C.fps) % S.loop;
+    const sc = CFG.scroll, span = 1 - sc.hold - sc.zoom - sc.end;
+    const u = clamp01((sNow - sc.hold) / span), w = smoothstep(u * span / sc.blend), zp = smoothstep((sNow - sc.hold - span) / sc.zoom);
+    const fs = u * PS;
+    const persp = P.persp > 0.5;
+    // the lens: orthographic while it's the C; as soon as the C starts to unbend, a dolly-zoom into the chosen lens,
+    // and the tilt and turn coming in over the line
+    const k = persp ? smoothstep(u / 0.12) : 0, kt = persp ? smoothstep(u / 0.55) : 0;
+    const t = clock;
+
+    // the light handing over from the C's sweep to the traffic, once the grid has formed
+    const handTo = (w < 0.5 || fs < form - 0.15 * PS) ? 0 : fs >= form ? 1 : hand > 0.5 ? 1 : 0;
+    hand += (handTo - hand) * (1 - Math.exp(-dt / 0.6));
+    // the connectors: seen from the top (today) they fade in as soon as the grid has formed, as on the live page; through
+    // a lens, only once every block has landed at the same height (before that they'd stretch into long slanted rods
+    // between blocks at different heights), then fading in gently
+    const conTo = persp ? (fs >= settled - 0.5 ? w : 0) : w * smoothstep((fs - form) / Math.max(CFG.connect.fadeIn * PS, 1));
+    conOn += (conTo - conOn) * (1 - Math.exp(-dt / (persp ? (conTo > conOn ? 0.6 : 0.05) : 0.2)));
+    // (only once every block of the C has settled into its place, so none of them glide in among the new ones)
+    const fieldTo = Math.max(zp, P.field && fs >= settled - 0.5 ? 1 : 0);
+    // the wider wall arrives slowly: "reveal" counts the seconds since it started (and runs back down, faster, when you
+    // scroll back up); its blocks fade in a few at a time, spreading out from the wall (CFG.reveal)
+    const RV = CFG.reveal;
+    // ...but goes quickly as soon as the wall breaks up (scrolling back up), so its blocks never sit over the C as it
+    // re-forms (the C reaches below the wall)
+    fieldVis = fieldTo > 0.5 ? 1 : fieldVis * Math.exp(-Math.min(dt, 60) / 0.08);
+    if (fieldTo > 0.5) reveal += Math.min(dt, 60); else if (fieldVis < 0.01) { reveal = 0; fieldVis = 0; }
+    fieldOn = smoothstep(reveal / RV.ease) * fieldVis;
+    flow = fieldOn < 0.02 ? 0 : flow + Math.min(dt, 0.1) * fieldOn;
+    // scroll lean: a spring pulled by how fast you scroll
+    const sv = snap ? 0 : (sNow - sPrev) / Math.max(dt, 1e-3); sPrev = sNow;
+    const leanT = Math.max(-1, Math.min(1, sv * 6)) * 16 * P.inertia * k;
+    if (snap) { lean = leanT; leanV = 0; } else { const h = Math.min(dt, 0.05); leanV += (40 * (leanT - lean) - 7 * leanV) * h; lean += leanV * h; }
+
+    // the C's own 60
+    for (let i = 0; i < C.n; i++) { poseAt(i, fLoop, fs, w); X[i] = pA.x; Z[i] = pA.z; Y[i] = pA.y; Q[i].copy(qA); }
+    const g = gridErr(X, Z);
+    // how much the grid is still a grid: the wall's traffic light only shows while it is (scrolling back up, the light
+    // goes the moment the blocks leave their places, rather than lingering as patches over the re-forming C)
+    const gridOK = 1 - smoothstep((g.err - 0.01) / 0.03);
+    const xLat = g.err < 0.05 ? g.x0 + pitch * Math.round((xF - g.x0) / pitch) : xF;
+
+    // ---- the camera (worked out first: the wider wall follows it)
+    const v = view(fs, w);
+    const dr = P.drift * k;
+    const pu = ptr.on ? (ptr.u - 0.5) * P.parallax * k : 0, pv = ptr.on ? (ptr.v - 0.5) * P.parallax * k : 0;
+    let tx = v.x + dr * pitch * 0.6 * Math.sin(0.05 * t), tz = v.z;
+    let tiltT = (P.tilt + P.revTilt * zp) * kt + dr * 3.5 * Math.sin(0.09 * t + 1.0) + pv * 7 + lean;
+    let yawT = (P.yaw + P.revYaw * zp) * kt + dr * 7 * Math.sin(0.061 * t) - pu * 12;
+    // flowing forward over the wall: a little with time, more with scroll
+    const yawBase = ((P.yaw + P.revYaw * zp) * kt) * D2R, fwdX = -Math.sin(yawBase), fwdZ = -Math.cos(yawBase);
+    const wallPhase = clamp01((sNow - (sc.hold + 0.9 * span)) / (1 - sc.hold - 0.9 * span));
+    const trav = fieldOn * P.travel * pitch * (10 * wallPhase + 0.45 * flow);
+    tx += fwdX * trav; tz += fwdZ * trav;
+    // following a packet: low, behind it, looking down its row
+    const chaseTo = P.chase * fieldOn * (1 - zp) * k;
+    chase += (chaseTo - chase) * (1 - Math.exp(-dt / 0.9));
+    if (chase > 0.002) {
+      const k4 = mod(chaseRow - lr0, LR) * 4, sp = lanes[k4 + 1], spc = lanes[k4 + 2], ph = lanes[k4 + 3];
+      if (chaseM === null) chaseM = Math.round(((tx - xLat) / pitch - sp * t) / spc - ph);
+      const Xc = sp * t + spc * (ph + chaseM);
+      tx = lerp(tx, xLat + (Xc + 0.8) * pitch, chase); tz = lerp(tz, z0 + chaseRow * pitch, chase);
+      tiltT = lerp(tiltT, 66 + pv * 6 + lean, chase); yawT = lerp(yawT, -90 + dr * 6 * Math.sin(0.07 * t) - pu * 14, chase);
+    } else chaseM = null;
+    const thT = Math.exp(lerp(Math.log(TH0), Math.log(Math.tan(P.fov / 2 * D2R)), k));
+    const e = snap ? 1 : 1 - Math.exp(-dt / 0.35);
+    cam.tilt += (Math.max(0, tiltT) - cam.tilt) * e; cam.yaw += (yawT - cam.yaw) * e; cam.th += (thT - cam.th) * (snap ? 1 : 1 - Math.exp(-dt / 0.12));
+    const H = v.hh * (1 + ((persp ? P.revZoom : 2.2) - 1) * zp) * lerp(1, P.frame, k) * lerp(1, 0.42, chase);
+    const D = H / cam.th, th = cam.tilt * D2R, ps = cam.yaw * D2R, ty = restY;
+    camera.position.set(tx + D * Math.sin(th) * Math.sin(ps), ty + D * Math.cos(th), tz + D * Math.sin(th) * Math.cos(ps));
+    camera.up.set(-Math.sin(ps), 0, -Math.cos(ps));
+    camera.lookAt(tx, ty, tz);
+    camera.fov = 2 * Math.atan(cam.th) / D2R;
+    camera.aspect = aspect;
+    camera.near = Math.max(0.3, D - 120 - 10 * H); camera.far = D + 900;
+    camera.updateProjectionMatrix();
+    const fg = P.fog * k;
+    if (fg > 0.01) { scene.fog.near = D * 0.9; scene.fog.far = D * (0.9 + 2.2 / fg); } else { scene.fog.near = 1e8; scene.fog.far = 1e9; }
+
+    // ---- the wider wall sits around where the camera looks
+    const ahead = 7 * Math.sin(th) + 2, lx = -Math.sin(ps), lz = -Math.cos(ps);
+    const fcx = (tx + lx * ahead * pitch - xF) / pitch, fcz = (tz + lz * ahead * pitch - z0) / pitch;
+    ox = Math.round(fcx); oz = Math.round(fcz);
+    heightAt.fill(restY); presAt.fill(0);
+    for (let b = 0; b < FH; b++) for (let a = 0; a < FW; a++) { posX[b * FW + a] = xF + (ox - FX + a) * pitch; posZ[b * FW + a] = z0 + (oz - FZ + b) * pitch; }
+    for (let i = 0; i < C.n; i++) {
+      pA.set(X[i], Y[i], Z[i]);
+      M.compose(pA, Q[i], one);
+      for (const m of meshes) m.setMatrixAt(i, M);
+      glow.array[i] = still ? 0 : level(i, fSweep);
+      pres.array[i] = 1;
+      const kk = rel(Math.round((X[i] - xLat) / pitch), Math.round((Z[i] - z0) / pitch));
+      if (kk >= 0 && g.err < 0.05) { heightAt[kk] = Y[i]; presAt[kk] = 1; posX[kk] = X[i]; posZ[kk] = Z[i]; }
+    }
+    let n = C.n;
+    if (reveal > 0) {
+      // (after the first few seconds the front speeds up and runs off for good, so a moving camera, like the one
+      // following a packet, can never catch up with it and see blocks still fading in or out around it)
+      const reach = RV.speed * (reveal + 1.5 * Math.pow(Math.max(0, reveal - 4), 2));
+      for (let b = 0; b < FH; b++) for (let a = 0; a < FW; a++) {
+        const c = ox - FX + a, r = oz - FZ + b;
+        if (inWall(c, r)) continue;
+        const d = Math.max(Math.max(c0 - c, c - c1, 0), Math.max(-r, r - (NR - 1), 0));
+        // growing out from the wall, and fading out softly toward the edges of the patch that follows the camera (measured
+        // from where the camera looks, not whole cells, so blocks fade in and out smoothly as it moves instead of popping)
+        const p = fieldVis * smoothstep((reach - d + 1) / RV.soft) * smoothstep((FX - 0.5 - Math.abs(c - fcx)) / 6) * smoothstep((FZ - 0.5 - Math.abs(r - fcz)) / 6);
+        if (p < 0.003) continue;
+        pA.set(xF + c * pitch, restY, z0 + r * pitch);
+        M.compose(pA, restQ, one);
+        for (const m of meshes) m.setMatrixAt(n, M);
+        glow.array[n] = 0; pres.array[n] = p;
+        presAt[b * FW + a] = p;
+        n++;
+      }
+    }
+    for (const m of meshes) { m.count = n; m.instanceMatrix.needsUpdate = true; }
+    glow.needsUpdate = true; pres.needsUpdate = true;
+
+    // the connectors
+    let nc = 0;
+    if (conOn > 0.002) {
+      const conA = conOn * (1 - smoothstep((g.err - 0.01) / 0.11));
+      for (const [a, b, hz] of pairs) {
+        const ka = b * FW + a, kb = hz ? ka + 1 : ka + FW;
+        let pp = Math.min(presAt[ka], presAt[kb]) * conA;
+        if (pp < 0.003) continue;
+        const c = ox - FX + a, r = oz - FZ + b;
+        // from the blocks' actual places (not the ideal grid), tube centre line to tube centre line
+        const ux = hz ? conStart : 0, uz = hz ? 0 : conStart;
+        pA.set(posX[ka] + ux, heightAt[ka], posZ[ka] + uz); pB.set(posX[kb] - ux, heightAt[kb], posZ[kb] - uz);
+        dirV.subVectors(pB, pA); const len = dirV.length();
+        // through a lens, a connector only shows while its two blocks sit level and the right distance apart: as soon as
+        // they move (scrolling back up, the blocks lift), it's gone at once instead of stretching into a slanted rod
+        if (persp) { pp *= 1 - smoothstep(Math.abs(len - conLen) / (0.06 * pitch)); if (pp < 0.003) continue; }
+        mid.addVectors(pA, pB).multiplyScalar(0.5);
+        qC.setFromUnitVectors(yAx, dirV.divideScalar(len));
+        sC.set(1, len / conGeoLen, 1);   // (the geometry is already the tube's thickness, with its fillets)
+        M.compose(mid, qC, sC);
+        con.setMatrixAt(nc, M);
+        aCon.array.set([c, r, hz, pp], nc * 4);
+        nc++;
+      }
+    }
+    con.count = conDepth.count = nc; con.instanceMatrix.needsUpdate = true; aCon.needsUpdate = true;
+
+    // the ends of the wall fade out (so its blocks gliding round the ends never show), until the wall goes on
+    const xa = xF + c0 * pitch, xb = xF + c1 * pitch;
+    const maskOn = w * smoothstep((fs - form + 10) / 10) * (1 - fieldOn);
+    U.uMask.value.set(xa - 0.45 * pitch, xb + 0.45 * pitch, 0.5 * pitch, persp ? maskOn : 0);
+    U.uNet.value.x = xLat;
+    U.uNetA.value.x = t;
+    U.uNetB.value.set(NT.rest, NT.restBrightness, still ? 0 : hand * gridOK, CFG.tubes.flicker);
+    const az = 2.3, el = 0.35;
+    U.uKeyDir.value.set(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)).normalize();
+    U.uKey.value.set(P.key * k, P.sheen * k * 0.9, 70, 0);
+    U.uSpill2.value.set(P.spill * k, P.ao * k, k * hand * gridOK, 0);
+
+    hudPhase.textContent = w < 0.02 ? "C" : fs < form ? "C → line → grid" : zp > 0.02 ? "Grid wall, pulled back" : "Grid wall";
+    hudCam.textContent = camera.fov < 1 ? "orthographic (top)" : `lens ${camera.fov.toFixed(0)}° · tilt ${cam.tilt.toFixed(0)}° · turn ${cam.yaw.toFixed(0)}°`;
+    const dofA = P.dof * k;
+    floor.visible = dofA > 0.01 && fs >= settled - 0.5;
+    floor.position.set(tx, restY - blockBottom * 1.05, tz);
+    if (dofA > 0.01) {
+      bgFor(true);
+      DOF.uAmt.value = dofA; DOF.uFocus.value = D; DOF.uNF.value.set(camera.near, camera.far);
+      renderer.setRenderTarget(rt); renderer.render(scene, camera);
+      renderer.setRenderTarget(cocRT); renderer.render(cocScene, postCam);
+      renderer.setRenderTarget(null); renderer.render(postScene, postCam);
+    } else { bgFor(false); renderer.render(scene, camera); }
+  }
+  let manual = false;
+  box.__lab = { stepTo: (s1, n = 10) => { manual = true; const s0 = sNow; for (let k = 1; k <= n; k++) { sNow = s0 + (s1 - s0) * k / n; clock += 1 / 30; draw(1 / 30); } }, dbg: () => ({ fieldOn, reveal, chase, ...dbgNow }), set: (s, tt) => { sNow = s; if (tt !== undefined) clock = tt; snapNext = 3; }, P, applyPreset, draw };
+
+  function loop(now) {
+    if (manual) return;
+    const dt = last ? Math.min(0.1, (now - last) / 1000) : 0.016;
+    last = now;
+    if (!still) clock += dt;
+    const d = snapNext ? 0 : progress() - sNow;
+    sNow += CFG.scroll.smooth > 0 ? d * (1 - Math.exp(-dt / CFG.scroll.smooth)) : d;
+    draw(dt);
+  }
+  function resize() {
+    const wv = Math.max(1, box.clientWidth), h = Math.max(1, box.clientHeight);
+    aspect = wv / h;
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, CFG.maxPixelRatio));
+    renderer.setSize(wv, h, false);
+    const bs = renderer.getDrawingBufferSize(new THREE.Vector2());
+    rt.setSize(bs.x, bs.y); cocRT.setSize(bs.x, bs.y); DOF.uRes.value.copy(bs); DOF.uMax.value = 12 * renderer.getPixelRatio(); DOF.uPR.value = renderer.getPixelRatio();
+    planCamera();
+  }
+  new ResizeObserver(resize).observe(box);
+  resize();
+  new IntersectionObserver((es) => { last = 0; renderer.setAnimationLoop(es[es.length - 1].isIntersecting ? loop : null); }).observe(box);
+}
+</script>
+
+</html>
