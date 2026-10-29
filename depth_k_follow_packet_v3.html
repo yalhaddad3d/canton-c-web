@@ -137,7 +137,7 @@ const CFG = {
   look: { block: "c_block.webp", tube: "c_tube.webp", levels: 8 },
   glow: 1.0, brightness: 1.0,
   grain: { amount: 0.25, lift: 0.002, scale: 72 },
-  glass: { clear: 0.75, edge: 3.0 },
+  glass: { clear: 0.45, edge: 3.0 },   // (was 0.75: more opaque glass, tubes and connectors alike)
   spill: { color: [0.12, 0.19, 0.0], reach: 0.07, amount: 0.2 },
   background: "#10100E",
   camera: { x: 2.4152, z: -0.8530, width: 22.2597 },
@@ -563,7 +563,7 @@ vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y )
       "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;",
       `vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;
 float ndv = clamp( abs( normal.z ), 0.0, 1.0 );
-diffuseColor.a = max( mix( 0.25, 1.0, pow( 1.0 - ndv, 3.0 ) ), g );
+diffuseColor.a = max( mix( ${(1 - CFG.glass.clear).toFixed(3)}, 1.0, pow( 1.0 - ndv, ${CFG.glass.edge.toFixed(3)} ) ), g );   // (the tubes' own glass)
 outgoingLight *= mix( 1.0, wflk( vW.xz, g ) * gain, uNetB.z );
 outgoingLight *= mix( 1.0 - 0.65 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, g ) );`).replace("#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= vCon.w * emask( vW.x );");
   };
