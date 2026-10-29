@@ -543,7 +543,12 @@ outgoingLight *= mix( 1.0 - 0.65 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, gw ) 
       "#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= pm;");
   };
   // the connectors, now real tubes in 3D (they bend when neighbouring blocks sit at different heights)
-  const conMat = new THREE.MeshMatcapMaterial({ matcap: tubeTex, ...glassBlend });
+  // the connectors are light, not glass objects: they glow in the tubes' own colour (no shading of their own, laid over
+  // what's behind rather than added to it, so where one overlaps its tube there's no doubled-up hot spot), soft across
+  // their width and melting into the tubes at both ends. As solid glass rods, wherever one was partly
+  // hidden behind a block its end showed as a bump on the tube, a separate physical part; light has no such edge
+  const conMat = new THREE.MeshMatcapMaterial({ matcap: tubeTex, transparent: true, depthWrite: false, fog: false,
+    blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor });
   conMat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, U, { uLevels: { value: CFG.look.levels }, uConM: { value: new THREE.Vector2((Math.min(inner, half) - 0.02 * half) / pitch, 0) } });
     sh.vertexShader = "attribute vec4 aCon;\nvarying vec4 vCon;\nvarying float vAlong;\nvarying vec3 vW;\n" + sh.vertexShader.replace("#include <begin_vertex>",
@@ -558,10 +563,12 @@ float g = clamp( uNetB.x + tr, 0.0, 1.0 ), gain = mix( uNetB.y, 1.3, clamp( tr, 
 float lv = clamp( g, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );
 vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ), texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );`).replace(
       "vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;",
-      `// (shaded, dimmed at rest and see-through exactly like the squares' own tubes, so they read as the same neon)
-vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb * gain * wflk( vW.xz, g ) * mix( 1.0 - 0.65 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, g ) );
-float ndv = clamp( abs( normal.z ), 0.0, 1.0 );
-diffuseColor.a = max( mix( 0.25, 1.0, pow( 1.0 - ndv, 3.0 ) ), clamp( g, 0.0, 1.0 ) );`).replace("#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= vCon.w * emask( vW.x );");
+      `float ndv = clamp( abs( normal.z ), 0.0, 1.0 );
+float across = smoothstep( 0.0, 0.9, ndv );                                            // soft toward its edges, like a glow
+float ends = smoothstep( 0.0, 0.2, vAlong ) * smoothstep( 0.0, 0.2, 1.0 - vAlong );   // melting into the tubes
+// (at rest as dim as the tubes at rest, up to full as traffic passes through)
+vec3 outgoingLight = tubeLit( g ) * gain * wflk( vW.xz, g ) * mix( 1.0 - 0.65 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, g ) );
+float cov = across * ends;`).replace("#include <dithering_fragment>", "#include <dithering_fragment>\nfloat ca = cov * vCon.w * emask( vW.x );\ngl_FragColor = vec4( gl_FragColor.rgb * ca, ca );");
   };
 
   // ---- meshes
@@ -866,6 +873,18 @@ void main() {
         // through a lens, a connector only shows while its two blocks sit level and the right distance apart: as soon as
         // they move (scrolling back up, the blocks lift), it's gone at once instead of stretching into a slanted rod
         if (persp) { pp *= 1 - smoothstep(Math.abs(len - conLen) / (0.06 * pitch)); if (pp < 0.003) continue; }
+        // (light seen end-on bunches up into a bright dot: the more directly a connector points at the camera, the dimmer it
+        // glows, so those read as a faint glow on the tube rather than beads)
+        if (persp) {
+          const vx = (pA.x + pB.x) / 2 - camera.position.x, vy = (pA.y + pB.y) / 2 - camera.position.y, vz = (pA.z + pB.z) / 2 - camera.position.z;
+          const along = Math.abs(hz ? vx : vz) / (Math.hypot(vx, vy, vz) || 1);
+          pp *= 1 - 0.85 * smoothstep((along - 0.45) / 0.45);
+          // far away a connector is only a few pixels long and the focus blur turns it into a speckled dot, while the long
+          // tubes around it blur into soft lines: well past the sharp area, they fade out
+          const dist = Math.hypot(vx, vy, vz);   // (D: how far the camera is from where it looks, the sharp area)
+          pp *= 1 - smoothstep((dist - 1.8 * D) / (1.2 * D));
+          if (pp < 0.003) continue;
+        }
         mid.addVectors(pA, pB).multiplyScalar(0.5);
         qC.setFromUnitVectors(yAx, dirV.divideScalar(len));
         sC.set(conRad, len, conRad);
