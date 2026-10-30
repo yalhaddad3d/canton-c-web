@@ -737,10 +737,12 @@ float gA = clamp( uNetB.x + tr, 0.0, 1.0 ), gainA = mix( uNetB.y, 1.3, clamp( tr
 float wA = clamp( vAW, 0.0, 1.0 );
 // ONE material over the whole piece: the arms are shaded exactly as the tube is (the same glass, the same light), only
 // their light level follows the link's traffic lane instead of the ring's. Nothing switches at the joint
-// (near the ring the arm also carries the ring's own light, fading toward the middle of the gap, so where the ring is lit
-// the joint reads as one lit piece; a packet on the link still lights the arm right up to the ring)
-float nearR = 1.0 - smoothstep( uNet.w + uArmR, 0.5 * uNet.z, vT );   // (1 where the arm leaves the ring, 0 in the middle of the gap)
-float g = mix( gw, max( gA, gw * nearR ), wA );
+// the arm carries its ring's light where it leaves it, blending along the gap into the neighbour's ring's light where it
+// reaches that one (the same point of the blend from both sides, so the two arms meet seamlessly), so a lit ring and its
+// arm read as one lit piece, with no dark notch at the joint; a packet on the link still lights the arm end to end
+vec2 pN = vW.xz + adir * 2.0 * ( 0.5 * uNet.z - vT );   // (the same point mirrored to the neighbour's side of the gap)
+float kR = clamp( ( vT - ( uNet.w + uArmR ) ) / ( uNet.z - 2.0 * ( uNet.w + uArmR ) ), 0.0, 1.0 );
+float g = mix( gw, max( gA, mix( gw, wglow( vGlow, pN ), kR ) ), wA );
 float lv = clamp( g * uGlass.z, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );
 vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ), texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );
 matcapColor.rgb *= mix( 1.0, uBright, clamp( g, 0.0, 1.0 ) );`).replace(
@@ -748,7 +750,7 @@ matcapColor.rgb *= mix( 1.0, uBright, clamp( g, 0.0, 1.0 ) );`).replace(
         `vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;
 float ndv = clamp( abs( normal.z ), 0.0, 1.0 );
 diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( g, 0.0, 1.0 ) );
-float lvN = mix( netLevel( vW.xz ), max( gA, netLevel( vW.xz ) * nearR ), wA ), gnN = mix( netGain( vW.xz ), max( gainA, netGain( vW.xz ) * nearR ), wA );
+float lvN = mix( netLevel( vW.xz ), max( gA, mix( netLevel( vW.xz ), netLevel( pN ), kR ) ), wA ), gnN = mix( netGain( vW.xz ), max( gainA, mix( netGain( vW.xz ), netGain( pN ), kR ) ), wA );
 outgoingLight *= mix( 1.0, wflk( vW.xz, lvN ) * gnN, uNetB.z ) * mix( 1.0 - 0.65 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, g ) );`).replace(
         "#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= pm * mix( 1.0, clamp( vSV, 0.0, 1.0 ), wA );   // (an arm fades in and out as a whole)");
     };
