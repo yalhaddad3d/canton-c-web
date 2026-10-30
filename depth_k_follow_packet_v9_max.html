@@ -706,12 +706,12 @@ diffuseColor.a = 1.0;`).replace("#include <dithering_fragment>", "#include <dith
 attribute vec4 aCell, aSides;
 uniform vec2 uArmDir[ 4 ];
 uniform float uPitch;
-varying float vSide, vT, vAW;
+varying float vSide, vT, vAW, vSV;
 varying vec4 vCell;
 `;
     const growNormal = `float aSide = aSTW.x;
 float pS = aSide < 0.5 ? aSides.x : aSide < 1.5 ? aSides.y : aSide < 2.5 ? aSides.z : aSides.w;
-float pE = smoothstep( 0.0, 1.0, pS );
+float pE = step( 0.003, pS );   // (an arm is there or folded away, as the connectors were; it fades in and out with pS, below)
 vec3 objectNormal = normalize( mix( aNc, normal, pE ) );`;
     const growPos = `vec3 transformed = mix( aPc, position, pE );
 if ( aCell.z < 0.5 ) transformed = vec3( 0.0 );   // (the tube draws this block)`;
@@ -720,11 +720,11 @@ if ( aCell.z < 0.5 ) transformed = vec3( 0.0 );   // (the tube draws this block)
       withNet(sh);
       sh.vertexShader = GROW_V + sh.vertexShader
         .replace("#include <beginnormal_vertex>", growNormal)
-        .replace("#include <begin_vertex>", growPos + "\nvSide = aSide; vT = aSTW.y; vAW = aSTW.z * pE; vCell = aCell;")
+        .replace("#include <begin_vertex>", growPos + "\nvSide = aSide; vT = aSTW.y; vAW = aSTW.z * pE; vSV = pS; vCell = aCell;")
       // (the world position of the grown shape, not the stored one)
         .replace("vLocal = position;", "vLocal = transformed;").replace("vW = ( mI * vec4( position, 1.0 ) ).xyz;", "vW = ( mI * vec4( transformed, 1.0 ) ).xyz;");
       Object.assign(sh.uniforms, { uLevels: { value: CFG.look.levels }, uGlass: { value: new THREE.Vector3(CFG.glass.clear, CFG.glass.edge, Math.max(CFG.glow, 1e-3)) }, uBright: { value: CFG.brightness }, uArmDir: { value: armDir }, uPitch: { value: pitch } });
-      sh.fragmentShader = "uniform float uLevels, uBright;\nuniform vec3 uGlass;\nuniform vec2 uArmDir[ 4 ];\nvarying float vSide, vT, vAW;\nvarying vec4 vCell;\n" + sh.fragmentShader.replace("float gw = wglow( vGlow, vW.xz );", "float gw = wglow( vGlow, vW.xz );\nif ( vT > 0.5 * uNet.z + 6e-4 ) discard;   // (the neighbour's arm draws the rest; the hair of overlap covers rounding)").replace(
+      sh.fragmentShader = "uniform float uLevels, uBright;\nuniform vec3 uGlass;\nuniform vec2 uArmDir[ 4 ];\nvarying float vSide, vT, vAW, vSV;\nvarying vec4 vCell;\n" + sh.fragmentShader.replace("float gw = wglow( vGlow, vW.xz );", "float gw = wglow( vGlow, vW.xz );\nif ( vT > 0.5 * uNet.z + 6e-4 ) discard;   // (the neighbour's arm draws the rest; the hair of overlap covers rounding)").replace(
         "vec4 matcapColor = texture2D( matcap, uv );",
         `// the arm's light: the lane of the link it belongs to (between this block and its neighbour), as the connectors'
 vec2 adir = uArmDir[ int( vSide + 0.5 ) ];
@@ -747,7 +747,7 @@ float mT = mix( 1.0, wflk( vW.xz, netLevel( vW.xz ) ) * netGain( vW.xz ), uNetB.
 float mA = gainA * wflk( vW.xz, gA ) * mix( 1.0 - 0.5 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, gA ) );
 outgoingLight *= mix( mT, mA, wA );
 diffuseColor.a = mix( aTube, 1.0, wA );`).replace(
-        "#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= pm * mix( 1.0, sqrt( gA ), wA );");
+        "#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= pm * mix( 1.0, sqrt( gA ) * clamp( vSV, 0.0, 1.0 ), wA );");
     };
     // (pushed back a hair, so the colour pass always passes its own depth: no specks where the two shaders round differently)
     const pieceDepthMat = new THREE.MeshBasicMaterial({ colorWrite: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
