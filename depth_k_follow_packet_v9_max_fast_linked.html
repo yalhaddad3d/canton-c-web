@@ -158,7 +158,10 @@ const CFG = {
   // surface can sit from the true round shape (for the 24-sided level, under 1% of the tube's radius). Every block, every
   // frame, draws the lightest level whose error comes out under `px` pixels on screen at its distance, so the
   // silhouette looks the same as the finest level's everywhere. Blocks outside the view aren't drawn at all
-  pieces: ["c_piece_l0.bin", "c_piece_l1.bin", "c_piece_l2.bin", "c_piece_l3.bin", "c_piece_l4.bin"],
+  // (this page: the "soft" pieces, whose joint has a tiny rounded bend (0.03, about a quarter of the tube's radius), so the
+  // shading runs smoothly from connector to tube instead of breaking in a hard line; at viewing distance it still reads
+  // as a straight T)
+  pieces: ["c_piece_soft_l0.bin", "c_piece_soft_l1.bin", "c_piece_soft_l2.bin", "c_piece_soft_l3.bin", "c_piece_soft_l4.bin"],
   lod: { px: 0.4 },
   tubes: { flicker: 0.45, flickerSpeed: 1.0 },
   maxPixelRatio: 2,
@@ -758,10 +761,18 @@ float wA = clamp( vAW, 0.0, 1.0 );
 // arm read as one lit piece, with no dark notch at the joint; a packet on the link still lights the arm end to end
 vec2 pN = vW.xz + adir * 2.0 * ( 0.5 * uNet.z - vT );   // (the same point mirrored to the neighbour's side of the gap)
 float kR = clamp( ( vT - ( uNet.w + uArmR ) ) / ( uNet.z - 2.0 * ( uNet.w + uArmR ) ), 0.0, 1.0 );
-// linked light: a connector is lit, along its whole length, whenever either of the two tiles it joins is lit where it
-// meets them (and packets on its own lane still light it on top), so a lit tile never sits next to a dark connector.
-// Both arms of a connector take the brighter of the two tiles, so they match where they meet
-float g = mix( gw, max( gA, max( gw, wglow( vGlow, pN ) ) ), wA );
+// linked light: where a connector meets its tile it has exactly that tile's light (so there's no step in brightness
+// between tube and connector), and from there to the middle of the gap it rises smoothly to the brighter of its two
+// tiles. So a lit tile's connectors are lit all the way across, a dark tile's connector brightens gradually toward a lit
+// neighbour, and both arms match in the middle. Packets on the connector's own lane still light it on top
+float kL = smoothstep( 0.0, 0.5, kR );
+// and the other way: the tube, around where a connector joins it, also takes the connector's own light (a packet arriving
+// on the connector spreads into the tube there instead of stopping at a hard edge), so tube and connector always have
+// the same light where they meet
+vec2 dC = vW.xz - ( uNet.xy + ncell( vW.xz ) * uNet.z );
+float fJ = ( 1.0 - smoothstep( uArmR, uArmR + 0.35, abs( dot( dC, vec2( - adir.y, adir.x ) ) ) ) ) * clamp( vSV, 0.0, 1.0 );
+float gwJ = max( gw, gA * fJ );
+float g = mix( gwJ, max( gA, mix( gw, max( gw, wglow( vGlow, pN ) ), kL ) ), wA );
 float lv = clamp( g * uGlass.z, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );
 vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ), texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );
 matcapColor.rgb *= mix( 1.0, uBright, clamp( g, 0.0, 1.0 ) );`).replace(
@@ -769,7 +780,7 @@ matcapColor.rgb *= mix( 1.0, uBright, clamp( g, 0.0, 1.0 ) );`).replace(
         `vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;
 float ndv = clamp( abs( normal.z ), 0.0, 1.0 );
 diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( g, 0.0, 1.0 ) );
-float lvN = mix( netLevel( vW.xz ), max( gA, max( netLevel( vW.xz ), netLevel( pN ) ) ), wA ), gnN = mix( netGain( vW.xz ), max( gainA, max( netGain( vW.xz ), netGain( pN ) ) ), wA );
+float lvN = mix( max( netLevel( vW.xz ), gA * fJ ), max( gA, mix( netLevel( vW.xz ), max( netLevel( vW.xz ), netLevel( pN ) ), kL ) ), wA ), gnN = mix( max( netGain( vW.xz ), gainA * fJ ), max( gainA, mix( netGain( vW.xz ), max( netGain( vW.xz ), netGain( pN ) ), kL ) ), wA );
 outgoingLight *= mix( 1.0, wflk( vW.xz, lvN ) * gnN, uNetB.z ) * mix( 1.0 - 0.65 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, g ) );`).replace(
         "#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= pm * mix( 1.0, clamp( vSV, 0.0, 1.0 ), wA );   // (an arm fades in and out as a whole)");
     };
