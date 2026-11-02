@@ -762,7 +762,10 @@ float wA = clamp( vAW, 0.0, 1.0 );
 // have the same light where they meet: no step, and no dark notch even where a dark tube meets a lit connector
 vec2 pN = vW.xz + adir * 2.0 * ( 0.5 * uNet.z - vT );   // (the same point mirrored to the neighbour's side of the gap)
 vec2 dC = vW.xz - ( uNet.xy + ncell( vW.xz ) * uNet.z );
-float fJ = ( 1.0 - smoothstep( uArmR, uArmR + 0.35, abs( dot( dC, vec2( - adir.y, adir.x ) ) ) ) ) * clamp( vSV, 0.0, 1.0 );
+// (a long, soft falloff along the tube, about half a side, so the connector's light reads as a glow spreading into the
+// tube rather than a bright spot)
+float uJ = max( abs( dot( dC, vec2( - adir.y, adir.x ) ) ) - uArmR, 0.0 );
+float fJ = exp( - uJ / 0.45 ) * ( 1.0 - smoothstep( 0.6, 1.2, uJ ) ) * clamp( vSV, 0.0, 1.0 );
 float gC = max( gA, max( gw, wglow( vGlow, pN ) ) );
 float gwJ = max( gw, gC * fJ );
 float g = mix( gwJ, gC, wA );
