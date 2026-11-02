@@ -153,9 +153,10 @@ const CFG = {
   lod: { near: 7, max: 200 },
   tubes: { flicker: 0.45, flickerSpeed: 1.0 },
   maxPixelRatio: 2,
-  // phones and tablets: a lower pixel ratio (less to draw) and a longer scroll (each step of the animation gets more
-  // room). The scroll shares below stay the same; they're shares of the taller section
-  mobile: { query: "(max-width: 768px), (pointer: coarse)", maxPixelRatio: 1.5, track: "400vh" },
+  // phones and tablets: a lower pixel ratio (less to draw), a much longer scroll (each step of the animation gets more
+  // room: 7 screens of scrolling instead of 1.25), and a slower catch-up (smooth, seconds), so a quick flick of the
+  // finger eases through the animation instead of jumping it. The scroll shares below are shares of the taller section
+  mobile: { query: "(max-width: 768px), (pointer: coarse)", maxPixelRatio: 1.5, track: "800vh", smooth: 0.6 },
   sweep: { loop: 288, inStart: 20, inStep: 1.8, outStart: 210, outStep: 1.0, ramp: 16, reverse: false },
   // the scroll, as shares of the section (225vh tall: 1.25 screens of scrolling): the C holds, eases into the line, the
   // line and the grid wall play, the camera pulls back (zoom), and it rests for `end`. smooth: seconds to catch up
@@ -225,9 +226,10 @@ $("#toggle").onclick = () => {
   const c = $("#panel").classList.toggle("closed");
   $("#toggle").textContent = c ? "Show" : "Hide"; $("#toggle").setAttribute("aria-expanded", String(!c));
 };
+const mobileMQ = matchMedia(CFG.mobile.query);
 // on mobile, the longer scroll (and back again if the window changes, e.g. a tablet rotated or a desktop window resized)
 {
-  const mq = matchMedia(CFG.mobile.query), track = $(".c3d-track"), base = track.style.height;
+  const mq = mobileMQ, track = $(".c3d-track"), base = track.style.height;
   const fit = () => { track.style.height = mq.matches ? CFG.mobile.track : base; };
   fit(); mq.addEventListener("change", fit);
 }
@@ -1135,13 +1137,14 @@ void main() {
     last = now;
     if (!still) clock += dt;
     const d = snapNext ? 0 : progress() - sNow;
-    sNow += CFG.scroll.smooth > 0 ? d * (1 - Math.exp(-dt / CFG.scroll.smooth)) : d;
+    const sm = mobileMQ.matches ? CFG.mobile.smooth : CFG.scroll.smooth;
+    sNow += sm > 0 ? d * (1 - Math.exp(-dt / sm)) : d;
     draw(dt);
   }
   function resize() {
     const wv = Math.max(1, box.clientWidth), h = Math.max(1, box.clientHeight);
     aspect = wv / h;
-    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, matchMedia(CFG.mobile.query).matches ? CFG.mobile.maxPixelRatio : CFG.maxPixelRatio));
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, mobileMQ.matches ? CFG.mobile.maxPixelRatio : CFG.maxPixelRatio));
     renderer.setSize(wv, h, false);
     const bs = renderer.getDrawingBufferSize(new THREE.Vector2());
     rt.setSize(bs.x, bs.y); cocRT.setSize(bs.x, bs.y); DOF.uRes.value.copy(bs); DOF.uMax.value = 12 * renderer.getPixelRatio(); DOF.uPR.value = renderer.getPixelRatio();
