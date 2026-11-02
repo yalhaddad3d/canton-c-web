@@ -892,7 +892,18 @@ void main() {
     }
     if ( best < 1e8 ) c = best;
   }
-  gl_FragColor = vec4( c, 0.0, 0.0, 1.0 );
+  // (how far the blur of anything NEARER reaches over this pixel: a blurred tile in front spreads its blur over the sharp
+  // tiles and gaps behind its edge, as a real lens does, instead of stopping at a hard, stepped edge)
+  float dil = c;
+  for ( int ring = 1; ring <= 4; ring ++ ) {
+    float rad = uMax * float( ring ) / 4.0;
+    for ( int k = 0; k < 10; k ++ ) {
+      float a = float( k ) * 0.6283185 + float( ring ) * 0.31;
+      float ds = texture2D( tDepth, vUv + vec2( cos( a ), sin( a ) ) * rad / uRes ).x;
+      if ( ds < 0.99999 && ( ds < d || d >= 0.99999 ) ) { float cs = cocD( ds ); if ( cs >= rad ) dil = max( dil, cs ); }
+    }
+  }
+  gl_FragColor = vec4( c, dil, 0.0, 1.0 );
 }`,
   });
   const cocScene = new THREE.Scene();
@@ -905,24 +916,26 @@ void main() {
 uniform vec2 uRes;
 varying vec2 vUv;
 float coc( vec2 uv ) { return texture2D( tCoc, uv ).r; }
+float reach( vec2 uv ) { return texture2D( tCoc, uv ).g; }
 void main() {
   // (smoother blur: the blur amount is softened across edges, where it used to jump from pixel to pixel and leave stair
   // steps; the samples are turned by a different angle at every pixel, so a blurred edge reads as a soft gradient instead
   // of a few stepped copies; more samples; and sharp and blurred areas blend instead of switching)
   vec2 px = 1.0 / uRes;
   float c0 = 0.2 * ( coc( vUv ) + coc( vUv + vec2( 0.75, 0.75 ) * px ) + coc( vUv + vec2( -0.75, 0.75 ) * px ) + coc( vUv + vec2( 0.75, -0.75 ) * px ) + coc( vUv + vec2( -0.75, -0.75 ) * px ) );
+  float R = max( c0, 0.2 * ( reach( vUv ) + reach( vUv + vec2( 0.75, 0.75 ) * px ) + reach( vUv + vec2( -0.75, 0.75 ) * px ) + reach( vUv + vec2( 0.75, -0.75 ) * px ) + reach( vUv + vec2( -0.75, -0.75 ) * px ) ) );
   vec3 sharp = texture2D( tColor, vUv ).rgb;
   vec3 col = sharp;
-  if ( c0 > 0.35 ) {
+  if ( R > 0.35 ) {
     float rot = 6.2831853 * fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06711056, 0.00583715 ) ) ) );
     vec4 acc = vec4( sharp, 1.0 );
     for ( int i = 0; i < 56; i ++ ) {
-      float fi = float( i ) + 0.5, r = sqrt( fi / 56.0 ) * c0, a = fi * 2.39996 + rot;
+      float fi = float( i ) + 0.5, r = sqrt( fi / 56.0 ) * R, a = fi * 2.39996 + rot;
       vec2 uv = vUv + vec2( cos( a ), sin( a ) ) * r * px;
       float w = clamp( coc( uv ) - r + 1.0, 0.0, 1.0 );
       acc += vec4( texture2D( tColor, uv ).rgb * w, w );
     }
-    col = mix( sharp, acc.rgb / acc.a, smoothstep( 0.35, 1.5, c0 ) );
+    col = mix( sharp, acc.rgb / acc.a, smoothstep( 0.35, 1.5, R ) );
   }
   gl_FragColor = vec4( col, 1.0 );
   #include <colorspace_fragment>
