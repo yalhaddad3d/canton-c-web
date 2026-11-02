@@ -756,23 +756,16 @@ float gA = clamp( uNetB.x + tr, 0.0, 1.0 ), gainA = mix( uNetB.y, 1.3, clamp( tr
 float wA = clamp( vAW, 0.0, 1.0 );
 // ONE material over the whole piece: the arms are shaded exactly as the tube is (the same glass, the same light), only
 // their light level follows the link's traffic lane instead of the ring's. Nothing switches at the joint
-// the arm carries its ring's light where it leaves it, blending along the gap into the neighbour's ring's light where it
-// reaches that one (the same point of the blend from both sides, so the two arms meet seamlessly), so a lit ring and its
-// arm read as one lit piece, with no dark notch at the joint; a packet on the link still lights the arm end to end
+// linked light: a connector is lit all the way across whenever either of the two tiles it joins is lit where it meets
+// them, or a packet runs along its own lane; both of its arms use the same value, so they match in the middle. The tube,
+// around where a connector joins it, takes the connector's light too, fading along the tube, so tube and connector always
+// have the same light where they meet: no step, and no dark notch even where a dark tube meets a lit connector
 vec2 pN = vW.xz + adir * 2.0 * ( 0.5 * uNet.z - vT );   // (the same point mirrored to the neighbour's side of the gap)
-float kR = clamp( ( vT - ( uNet.w + uArmR ) ) / ( uNet.z - 2.0 * ( uNet.w + uArmR ) ), 0.0, 1.0 );
-// linked light: where a connector meets its tile it has exactly that tile's light (so there's no step in brightness
-// between tube and connector), and from there to the middle of the gap it rises smoothly to the brighter of its two
-// tiles. So a lit tile's connectors are lit all the way across, a dark tile's connector brightens gradually toward a lit
-// neighbour, and both arms match in the middle. Packets on the connector's own lane still light it on top
-float kL = smoothstep( 0.0, 0.5, kR );
-// and the other way: the tube, around where a connector joins it, also takes the connector's own light (a packet arriving
-// on the connector spreads into the tube there instead of stopping at a hard edge), so tube and connector always have
-// the same light where they meet
 vec2 dC = vW.xz - ( uNet.xy + ncell( vW.xz ) * uNet.z );
 float fJ = ( 1.0 - smoothstep( uArmR, uArmR + 0.35, abs( dot( dC, vec2( - adir.y, adir.x ) ) ) ) ) * clamp( vSV, 0.0, 1.0 );
-float gwJ = max( gw, gA * fJ );
-float g = mix( gwJ, max( gA, mix( gw, max( gw, wglow( vGlow, pN ) ), kL ) ), wA );
+float gC = max( gA, max( gw, wglow( vGlow, pN ) ) );
+float gwJ = max( gw, gC * fJ );
+float g = mix( gwJ, gC, wA );
 float lv = clamp( g * uGlass.z, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );
 vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ), texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );
 matcapColor.rgb *= mix( 1.0, uBright, clamp( g, 0.0, 1.0 ) );`).replace(
@@ -780,7 +773,8 @@ matcapColor.rgb *= mix( 1.0, uBright, clamp( g, 0.0, 1.0 ) );`).replace(
         `vec3 outgoingLight = diffuseColor.rgb * matcapColor.rgb;
 float ndv = clamp( abs( normal.z ), 0.0, 1.0 );
 diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( g, 0.0, 1.0 ) );
-float lvN = mix( max( netLevel( vW.xz ), gA * fJ ), max( gA, mix( netLevel( vW.xz ), max( netLevel( vW.xz ), netLevel( pN ) ), kL ) ), wA ), gnN = mix( max( netGain( vW.xz ), gainA * fJ ), max( gainA, mix( netGain( vW.xz ), max( netGain( vW.xz ), netGain( pN ) ), kL ) ), wA );
+float lvC = max( gA, max( netLevel( vW.xz ), netLevel( pN ) ) ), gnC = max( gainA, max( netGain( vW.xz ), netGain( pN ) ) );
+float lvN = mix( max( netLevel( vW.xz ), lvC * fJ ), lvC, wA ), gnN = mix( max( netGain( vW.xz ), gnC * fJ ), gnC, wA );
 outgoingLight *= mix( 1.0, wflk( vW.xz, lvN ) * gnN, uNetB.z ) * mix( 1.0 - 0.65 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, g ) );`).replace(
         "#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= pm * mix( 1.0, clamp( vSV, 0.0, 1.0 ), wA );   // (an arm fades in and out as a whole)");
     };
