@@ -777,7 +777,10 @@ float kS = smoothstep( 0.0, 1.0, clamp( 2.0 * kR, 0.0, 1.0 ) );
 float nb = wglow( vGlow, pN );
 float gC = max( gA, max( gw, nb * mix( LINK_JOINT, 1.0, kS ) ) );
 float gwJ = max( gw, nb * LINK_JOINT * fJ );
-float g = mix( gwJ, gC, wA );
+// (the connector eases from the tube's light to its own over a short stretch where it leaves the tube, about half the
+// tube's radius, so a lit connector meeting a dimmer tube never makes a hard line at the joint)
+float rJ = smoothstep( 0.0, 0.5 * uArmR + 0.03, vT - ( uNet.w + uArmR ) );
+float g = mix( gwJ, mix( gwJ, gC, rJ ), wA );
 float lv = clamp( g * uGlass.z, 0.0, 1.0 ) * ( uLevels - 1.0 ), l0 = min( floor( lv ), uLevels - 2.0 );
 vec4 matcapColor = mix( texture2D( matcap, vec2( ( l0 + uv.x ) / uLevels, uv.y ) ), texture2D( matcap, vec2( ( l0 + 1.0 + uv.x ) / uLevels, uv.y ) ), lv - l0 );
 matcapColor.rgb *= mix( 1.0, uBright, clamp( g, 0.0, 1.0 ) );`).replace(
@@ -786,7 +789,8 @@ matcapColor.rgb *= mix( 1.0, uBright, clamp( g, 0.0, 1.0 ) );`).replace(
 float ndv = clamp( abs( normal.z ), 0.0, 1.0 );
 diffuseColor.a = max( mix( 1.0 - uGlass.x, 1.0, pow( 1.0 - ndv, uGlass.y ) ), clamp( g, 0.0, 1.0 ) );
 float lvC = max( gA, max( netLevel( vW.xz ), netLevel( pN ) * mix( LINK_JOINT, 1.0, kS ) ) ), gnC = max( gainA, max( netGain( vW.xz ), netGain( pN ) * mix( LINK_JOINT, 1.0, kS ) ) );
-float lvN = mix( max( netLevel( vW.xz ), netLevel( pN ) * LINK_JOINT * fJ ), lvC, wA ), gnN = mix( max( netGain( vW.xz ), netGain( pN ) * LINK_JOINT * fJ ), gnC, wA );
+float lvJ = max( netLevel( vW.xz ), netLevel( pN ) * LINK_JOINT * fJ ), gnJ = max( netGain( vW.xz ), netGain( pN ) * LINK_JOINT * fJ );
+float lvN = mix( lvJ, mix( lvJ, lvC, rJ ), wA ), gnN = mix( gnJ, mix( gnJ, gnC, rJ ), wA );
 outgoingLight *= mix( 1.0, wflk( vW.xz, lvN ) * gnN, uNetB.z ) * mix( 1.0 - 0.65 * uSpill2.z, 1.0, smoothstep( 0.14, 0.55, g ) );`).replace(
         "#include <dithering_fragment>", "#include <dithering_fragment>\ngl_FragColor *= pm * mix( 1.0, clamp( vSV, 0.0, 1.0 ), wA );   // (an arm fades in and out as a whole)");
     };
