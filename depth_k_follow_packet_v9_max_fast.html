@@ -20,6 +20,7 @@
     color-scheme: dark;
   }
   [hidden] { display: none !important; }
+  html, body { overscroll-behavior: contain; }   /* (no scroll chaining past the page's ends) */
   body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans); }
   .intro { min-height: 55vh; display: flex; flex-direction: column; justify-content: flex-end; gap: 10px;
     padding-block: 48px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
