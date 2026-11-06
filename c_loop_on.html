@@ -1073,7 +1073,7 @@ void main() {
       pA.set(X[i], Y[i], Z[i]);
       M.compose(pA, Q[i], one);
       for (const m of meshes) m.setMatrixAt(i, M);
-      glow.array[i] = still ? 0 : litOnce(i, fRun);   // (always on: the sweep lights the tubes up once, and they stay lit)
+      glow.array[i] = 1;   // (always on: every tube fully lit from the first frame, and it stays that way)
       pres.array[i] = 1;
       const ci = Math.round((X[i] - xLat) / pitch), ri = Math.round((Z[i] - z0) / pitch), kk = rel(ci, ri);
       if (kk >= 0 && g.err < 0.05) { heightAt[kk] = Y[i]; presAt[kk] = 1; posX[kk] = X[i]; posZ[kk] = Z[i]; }
